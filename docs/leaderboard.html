@@ -1,63 +1,223 @@
 <!doctype html><html><head><meta charset="utf-8">
 <title>grouprec leaderboard</title>
-<style>
-body{font-family:system-ui,Arial,sans-serif;margin:2rem;color:#222}
-h1{font-size:1.4rem} .meta{color:#666;font-size:.85rem}
-table{border-collapse:collapse;margin-top:1rem;font-size:.9rem}
+<style>body{font-family:system-ui,Arial,sans-serif;margin:2rem;color:#222;max-width:1000px}
+h1{font-size:1.4rem}h2{font-size:1.1rem;margin-top:1.6rem}.meta{color:#666;font-size:.85rem}
+table{border-collapse:collapse;margin:.6rem 0;font-size:.9rem}
 th,td{border:1px solid #ddd;padding:.35rem .6rem;text-align:right}
-th{background:#f6f6f6;cursor:pointer} td:first-child,th:first-child{text-align:left}
-tr:nth-child(even){background:#fafafa}
-</style></head><body>
-<h1>grouprec leaderboard</h1>
-<p class="meta">ndcg@10 · min (fairness) · decoupled — grouprec demo</p>
+th{background:#f6f6f6}td:first-child,th:first-child,td:nth-child(2),th:nth-child(2){text-align:left}
+tr:nth-child(even){background:#fafafa}</style></head><body>
+<h1>grouprec — leaderboard</h1>
+<p class="meta">Generated 2026-06-24 16:21 UTC ·
+deep models and aggregators compared on the same data, splits, and metrics.</p>
+<h2>A. Coupled (sampled group-level HR/NDCG) — deep models vs aggregators</h2>
+<p class="meta">Faithful reimplementations on the 1-vs-99 sampled protocol. CAMRa2011 matches
+published ranges; Mafengwo is approximate (a training-procedure gap — full paper configs
+with early stopping would close it).</p>
 <table class="dataframe">
   <thead>
     <tr style="text-align: right;">
       <th>dataset</th>
-      <th>blobs</th>
-    </tr>
-    <tr>
       <th>recommender</th>
-      <th></th>
+      <th>HR@5</th>
+      <th>NDCG@5</th>
+      <th>HR@10</th>
+      <th>NDCG@10</th>
     </tr>
   </thead>
   <tbody>
     <tr>
-      <th>AVG</th>
-      <td>0.5639</td>
+      <td>CAMRa2011</td>
+      <td>EASE+AVG</td>
+      <td>0.5552</td>
+      <td>0.3540</td>
+      <td>0.7766</td>
+      <td>0.4260</td>
     </tr>
     <tr>
-      <th>EPFuzzDA</th>
-      <td>0.5701</td>
+      <td>CAMRa2011</td>
+      <td>EASE+GFAR</td>
+      <td>0.5841</td>
+      <td>0.3865</td>
+      <td>0.7979</td>
+      <td>0.4567</td>
     </tr>
     <tr>
-      <th>GFAR</th>
-      <td>0.5215</td>
+      <td>CAMRa2011</td>
+      <td>NCF</td>
+      <td>0.6228</td>
+      <td>0.4077</td>
+      <td>0.8076</td>
+      <td>0.4678</td>
     </tr>
     <tr>
-      <th>GreedyLM</th>
-      <td>0.5718</td>
+      <td>CAMRa2011</td>
+      <td>AGREE</td>
+      <td>0.6303</td>
+      <td>0.4183</td>
+      <td>0.8090</td>
+      <td>0.4765</td>
     </tr>
     <tr>
-      <th>LMS</th>
-      <td>0.5586</td>
+      <td>CAMRa2011</td>
+      <td>GroupIM</td>
+      <td>0.6297</td>
+      <td>0.4249</td>
+      <td>0.8131</td>
+      <td>0.4850</td>
     </tr>
     <tr>
-      <th>LTP</th>
-      <td>0.5701</td>
+      <td>CAMRa2011</td>
+      <td>HyperGroup</td>
+      <td>0.5979</td>
+      <td>0.4062</td>
+      <td>0.7938</td>
+      <td>0.4697</td>
     </tr>
     <tr>
-      <th>RLProp</th>
-      <td>0.5701</td>
+      <td>CAMRa2011</td>
+      <td>ConsRec</td>
+      <td>0.6200</td>
+      <td>0.4048</td>
+      <td>0.8131</td>
+      <td>0.4673</td>
+    </tr>
+    <tr>
+      <td>CAMRa2011</td>
+      <td>AlignGroup</td>
+      <td>0.5841</td>
+      <td>0.3842</td>
+      <td>0.7903</td>
+      <td>0.4510</td>
+    </tr>
+    <tr>
+      <td>Mafengwo</td>
+      <td>EASE+AVG</td>
+      <td>0.1950</td>
+      <td>0.1550</td>
+      <td>0.2563</td>
+      <td>0.1749</td>
+    </tr>
+    <tr>
+      <td>Mafengwo</td>
+      <td>EASE+GFAR</td>
+      <td>0.4030</td>
+      <td>0.2896</td>
+      <td>0.6563</td>
+      <td>0.3699</td>
+    </tr>
+    <tr>
+      <td>Mafengwo</td>
+      <td>NCF</td>
+      <td>0.6291</td>
+      <td>0.4566</td>
+      <td>0.7719</td>
+      <td>0.5031</td>
+    </tr>
+    <tr>
+      <td>Mafengwo</td>
+      <td>AGREE</td>
+      <td>0.6814</td>
+      <td>0.5183</td>
+      <td>0.7970</td>
+      <td>0.5560</td>
+    </tr>
+    <tr>
+      <td>Mafengwo</td>
+      <td>GroupIM</td>
+      <td>0.6372</td>
+      <td>0.5019</td>
+      <td>0.7286</td>
+      <td>0.5316</td>
+    </tr>
+    <tr>
+      <td>Mafengwo</td>
+      <td>HyperGroup</td>
+      <td>0.6794</td>
+      <td>0.5052</td>
+      <td>0.7950</td>
+      <td>0.5432</td>
+    </tr>
+    <tr>
+      <td>Mafengwo</td>
+      <td>ConsRec</td>
+      <td>0.6131</td>
+      <td>0.4554</td>
+      <td>0.7427</td>
+      <td>0.4969</td>
+    </tr>
+    <tr>
+      <td>Mafengwo</td>
+      <td>AlignGroup</td>
+      <td>0.4995</td>
+      <td>0.3532</td>
+      <td>0.6231</td>
+      <td>0.3931</td>
     </tr>
   </tbody>
 </table>
-<script>
-document.querySelectorAll('th').forEach((th,i)=>th.onclick=()=>{
- const tb=th.closest('table').tBodies[0];
- const rows=[...tb.rows];const asc=th.dataset.asc=th.dataset.asc==='1'?'0':'1';
- rows.sort((a,b)=>{const x=a.cells[i].innerText,y=b.cells[i].innerText;
-  const nx=parseFloat(x),ny=parseFloat(y);
-  const c=(!isNaN(nx)&&!isNaN(ny))?nx-ny:x.localeCompare(y);return asc==='1'?c:-c;});
- rows.forEach(r=>tb.appendChild(r));});
-</script></body></html>
+<h2>B. Decoupled (MovieLens) — aggregator relevance vs fairness trade-off</h2>
+<p class="meta">Higher <code>ndcg.min</code>/<code>minmax</code> = fairer; LTP/RLProp lead on
+fairness while AVG leads raw utility.</p>
+<table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>dataset</th>
+      <th>recommender</th>
+      <th>ndcg.mean (utility)</th>
+      <th>ndcg.min (fairness)</th>
+      <th>ndcg.minmax (balance)</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ml-100k</td>
+      <td>EPFuzzDA</td>
+      <td>0.3295</td>
+      <td>0.2669</td>
+      <td>0.6902</td>
+    </tr>
+    <tr>
+      <td>ml-100k</td>
+      <td>RLProp</td>
+      <td>0.3295</td>
+      <td>0.2669</td>
+      <td>0.6902</td>
+    </tr>
+    <tr>
+      <td>ml-100k</td>
+      <td>LTP</td>
+      <td>0.3295</td>
+      <td>0.2669</td>
+      <td>0.6902</td>
+    </tr>
+    <tr>
+      <td>ml-100k</td>
+      <td>GreedyLM</td>
+      <td>0.3221</td>
+      <td>0.2616</td>
+      <td>0.6846</td>
+    </tr>
+    <tr>
+      <td>ml-100k</td>
+      <td>AVG</td>
+      <td>0.3488</td>
+      <td>0.2166</td>
+      <td>0.4605</td>
+    </tr>
+    <tr>
+      <td>ml-100k</td>
+      <td>LMS</td>
+      <td>0.2698</td>
+      <td>0.1925</td>
+      <td>0.5518</td>
+    </tr>
+    <tr>
+      <td>ml-100k</td>
+      <td>GFAR</td>
+      <td>0.2730</td>
+      <td>0.1227</td>
+      <td>0.2802</td>
+    </tr>
+  </tbody>
+</table>
+</body></html>

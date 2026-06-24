@@ -129,6 +129,12 @@ hostable) + an accumulating `LeaderboardStore`. A live Streamlit browser is in
 `examples/leaderboard_app.py` (`pip install grouprec[demo]`). Plot the
 relevance–fairness trade-off with `gr.bench.viz.plot_pareto(...)`.
 
+`scripts/build_showcase.py` produces the headline two-panel board
+([`docs/leaderboard.html`](docs/leaderboard.html), refreshed by CI): (A) deep models vs
+`EASE+GFAR`/`EASE+AVG` under coupled sampled HR/NDCG on CAMRa2011 + Mafengwo; (B)
+aggregators decoupled on MovieLens, where **LTP/RLProp lead the fairness–utility
+trade-off** (`ndcg.min` 0.27 vs AVG 0.22; AVG wins raw utility).
+
 ## What's inside
 
 - **Aggregators** (numpy core): `ADD AVG LMS MUL MPL AVGNM BDC FAI`,

@@ -1,0 +1,30 @@
+name: leaderboard
+# Regenerate the static showcase leaderboard (docs/leaderboard.html) and commit it.
+# Manual or weekly — NOT per-push (it trains deep models, which takes minutes).
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 4 * * 1"   # Mondays 04:00 UTC
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install (with torch for the deep panel)
+        run: pip install -e ".[torch]"
+      - name: Fetch real group datasets (CAMRa2011 + Mafengwo)
+        run: git clone --depth 1 https://github.com/FDUDSDE/WWW2023ConsRec.git raw/tmp/WWW2023ConsRec
+      - name: Build leaderboard (MovieLens auto-fetches)
+        run: python scripts/build_showcase.py --consrec-data raw/tmp/WWW2023ConsRec/data --ml ml-100k
+      - name: Commit refreshed leaderboard
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/leaderboard.html examples/showcase_leaderboard.csv
+          git diff --cached --quiet || git commit -m "ci: regenerate showcase leaderboard"
+          git push
