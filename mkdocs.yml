@@ -1,0 +1,28 @@
+site_name: grouprec
+site_description: Group recommender systems for Python — results & profile aggregation behind one API
+repo_url: https://github.com/pdokoupil/grouprec
+theme:
+  name: material
+  features: [navigation.sections, content.code.copy, toc.integrate]
+nav:
+  - Home: index.md
+  - Design (the rift): design.md
+  - Concepts: concepts.md
+  - Datasets & licensing: datasets.md
+  - Evaluation & the rift: evaluation.md
+  - Reproducibility: reproducibility.md
+  - Extending (add algorithm/dataset/metric): extending.md
+  - Leaderboard: leaderboard.md
+markdown_extensions:
+  - admonition
+  - pymdownx.superfences
+  - toc:
+      permalink: true
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_root_heading: true
+            members_order: source

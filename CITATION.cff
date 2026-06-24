@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+title: "grouprec: Group recommender systems for Python"
+message: "If you use this software, please cite it and the relevant method (gr.cite(...))."
+type: software
+authors:
+  - family-names: Dokoupil
+    given-names: Patrik
+repository-code: "https://github.com/pdokoupil/grouprec"
+abstract: >-
+  A Python library for group recommendation that treats results aggregation and
+  profile aggregation as first-class citizens behind one API, with license-aware
+  datasets, coupled/decoupled and sampled group-level evaluation, and reproductions
+  of aggregator and deep-model baselines.
+keywords:
+  - group recommendation
+  - recommender systems
+  - preference aggregation
+  - fairness
+license: MIT

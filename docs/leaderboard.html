@@ -1,0 +1,63 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>grouprec leaderboard</title>
+<style>
+body{font-family:system-ui,Arial,sans-serif;margin:2rem;color:#222}
+h1{font-size:1.4rem} .meta{color:#666;font-size:.85rem}
+table{border-collapse:collapse;margin-top:1rem;font-size:.9rem}
+th,td{border:1px solid #ddd;padding:.35rem .6rem;text-align:right}
+th{background:#f6f6f6;cursor:pointer} td:first-child,th:first-child{text-align:left}
+tr:nth-child(even){background:#fafafa}
+</style></head><body>
+<h1>grouprec leaderboard</h1>
+<p class="meta">ndcg@10 · min (fairness) · decoupled — grouprec demo</p>
+<table class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th>dataset</th>
+      <th>blobs</th>
+    </tr>
+    <tr>
+      <th>recommender</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>AVG</th>
+      <td>0.5639</td>
+    </tr>
+    <tr>
+      <th>EPFuzzDA</th>
+      <td>0.5701</td>
+    </tr>
+    <tr>
+      <th>GFAR</th>
+      <td>0.5215</td>
+    </tr>
+    <tr>
+      <th>GreedyLM</th>
+      <td>0.5718</td>
+    </tr>
+    <tr>
+      <th>LMS</th>
+      <td>0.5586</td>
+    </tr>
+    <tr>
+      <th>LTP</th>
+      <td>0.5701</td>
+    </tr>
+    <tr>
+      <th>RLProp</th>
+      <td>0.5701</td>
+    </tr>
+  </tbody>
+</table>
+<script>
+document.querySelectorAll('th').forEach((th,i)=>th.onclick=()=>{
+ const tb=th.closest('table').tBodies[0];
+ const rows=[...tb.rows];const asc=th.dataset.asc=th.dataset.asc==='1'?'0':'1';
+ rows.sort((a,b)=>{const x=a.cells[i].innerText,y=b.cells[i].innerText;
+  const nx=parseFloat(x),ny=parseFloat(y);
+  const c=(!isNaN(nx)&&!isNaN(ny))?nx-ny:x.localeCompare(y);return asc==='1'?c:-c;});
+ rows.forEach(r=>tb.appendChild(r));});
+</script></body></html>

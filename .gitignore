@@ -1,0 +1,24 @@
+# data & external sources (licensing — never commit)
+raw
+*.zip
+
+# experiment scratch outputs (regenerate with scripts/run_leaderboard.py;
+# a curated sample lives in examples/sample_leaderboard.csv)
+results/
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# env & os
+.venv/
+.DS_Store
+
+# docs build
+site/
