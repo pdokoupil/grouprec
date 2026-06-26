@@ -38,6 +38,34 @@ class AverageAggregator(Aggregator):
         return top_k_indices(rm.mean(axis=0), k, avail)
 
 
+class WeightedAverageAggregator(Aggregator):
+    """wAVG -- member-importance-weighted mean of member scores.
+
+    ``member_weights`` are relative per-member importances (any non-negative scale);
+    they are normalized to sum to one, so uniform weights recover :class:`AverageAggregator`.
+    The member order must match the rows of the score matrix.
+    """
+
+    name = "wAVG"
+
+    def __init__(self, member_weights=None) -> None:
+        self._member_weights = None if member_weights is None else np.asarray(member_weights, dtype=float)
+
+    def aggregate(self, scores, k, *, exclude=None):
+        rm = as_score_matrix(scores)
+        m = rm.shape[0]
+        if self._member_weights is None:
+            w = np.full(m, 1.0 / m)
+        else:
+            w = self._member_weights
+            if w.size != m:
+                raise ValueError(f"member_weights has {w.size} entries but group has {m} members.")
+            s = w.sum()
+            w = np.full(m, 1.0 / m) if s <= 0 else w / s
+        avail = available_mask(rm.shape[1], exclude)
+        return top_k_indices((w[:, None] * rm).sum(axis=0), k, avail)
+
+
 class LeastMiseryAggregator(Aggregator):
     """LMS -- minimum (least misery) of member scores."""
 

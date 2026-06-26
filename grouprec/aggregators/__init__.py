@@ -6,6 +6,7 @@ from .base import Aggregator, SequentialAggregator, Paradigm
 from .social_choice import (
     AdditiveAggregator,
     AverageAggregator,
+    WeightedAverageAggregator,
     LeastMiseryAggregator,
     MultiplicativeAggregator,
     MostPleasureAggregator,
@@ -35,6 +36,7 @@ from .sequential import (
 _REGISTRY: dict[str, type[Aggregator]] = {
     "ADD": AdditiveAggregator,
     "AVG": AverageAggregator,
+    "wAVG": WeightedAverageAggregator,
     "LMS": LeastMiseryAggregator,
     "MUL": MultiplicativeAggregator,
     "MPL": MostPleasureAggregator,
@@ -77,6 +79,7 @@ __all__ = [
     "Paradigm",
     "AdditiveAggregator",
     "AverageAggregator",
+    "WeightedAverageAggregator",
     "LeastMiseryAggregator",
     "MultiplicativeAggregator",
     "MostPleasureAggregator",

@@ -16,13 +16,34 @@ from scipy.stats import rankdata
 from grouprec.aggregators import (
     AdditiveAggregator,
     AverageAggregator,
+    WeightedAverageAggregator,
     LeastMiseryAggregator,
     MultiplicativeAggregator,
     MostPleasureAggregator,
     AVGNoMiseryAggregator,
     BordaCountAggregator,
     FAIAggregator,
+    get,
 )
+
+
+def test_weighted_average_uniform_equals_average():
+    rng = np.random.default_rng(0)
+    rm = rng.random((3, 20))
+    a = AverageAggregator().aggregate(rm, 20)
+    b = WeightedAverageAggregator().aggregate(rm, 20)
+    c = WeightedAverageAggregator(member_weights=[2.0, 2.0, 2.0]).aggregate(rm, 20)
+    assert np.array_equal(a, b)
+    assert np.array_equal(a, c)            # any uniform scale == plain mean
+    assert get("wAVG") is not None         # registered in the factory
+
+
+def test_weighted_average_weights_shift_ranking():
+    # member 0 alone prefers item 0; member 1 alone prefers item 1
+    rm = np.array([[1.0, 0.0, 0.5], [0.0, 1.0, 0.5]])
+    top0 = WeightedAverageAggregator(member_weights=[0.9, 0.1]).aggregate(rm, 1)[0]
+    top1 = WeightedAverageAggregator(member_weights=[0.1, 0.9]).aggregate(rm, 1)[0]
+    assert top0 == 0 and top1 == 1
 
 
 # --------------------------------------------------------------------------- #
