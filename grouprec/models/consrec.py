@@ -85,7 +85,9 @@ def _build_lightgcn(members_group_items, G, device):
 class _PredictLayer(nn.Module):
     def __init__(self, d, drop=0.0):
         super().__init__()
-        self.net = nn.Sequential(nn.Linear(d, 8), nn.ReLU(), nn.Dropout(drop), nn.Linear(8, 1))
+        # LeakyReLU (not ReLU): the element-wise g*i product is often all-negative, which
+        # kills a ReLU head ("dead ReLU" — see the ConsRec/AlignGroup code comments).
+        self.net = nn.Sequential(nn.Linear(d, 8), nn.LeakyReLU(), nn.Dropout(drop), nn.Linear(8, 1))
 
     def forward(self, x):
         return self.net(x)
@@ -172,7 +174,7 @@ class ConsRec:
 
     def __init__(self, groups: Groups, group_interactions, *, emb_dim: int = 32,
                  layers: int = 3, epochs: int = 100, lr: float = 0.001,
-                 num_negatives: int = 8, predictor: str = "DOT", batch_size: int = 512,
+                 num_negatives: int = 8, predictor: str = "MLP", batch_size: int = 512,
                  weight_decay: float = 1e-5, user_item: bool = True, seed: int | None = 0,
                  device: str = "cpu") -> None:
         self.groups = groups
@@ -190,6 +192,7 @@ class ConsRec:
         self.device = device
         self.dataset_: Dataset | None = None
         self.net_: _ConsRecNet | None = None
+        self._fused_cache = None
 
     def fit(self, dataset: Dataset) -> "ConsRec":
         if self.seed is not None:
@@ -216,37 +219,46 @@ class ConsRec:
         self._g_pos = np.array(gp, dtype=np.int64) if gp else np.zeros((0, 2), np.int64)
         self._u_pos = np.vstack([dataset.interactions["user"].map(ui).to_numpy(),
                                  dataset.interactions["item"].map(ii).to_numpy()]).T
+        self._fused_cache = None
         self._train()
         return self
 
+    def _expand(self, pairs, rng):
+        """num_negatives expansion -> shuffled (entity, pos, neg) rows, like the
+        original get_train_instances + DataLoader (one negative per row)."""
+        ent = np.repeat(pairs[:, 0], self.num_negatives)
+        pos = np.repeat(pairs[:, 1], self.num_negatives)
+        neg = rng.integers(0, self.dataset_.n_items, size=ent.shape[0])
+        perm = rng.permutation(ent.shape[0])
+        return ent[perm], pos[perm], neg[perm]
+
     def _train(self):
         net = self.net_
-        I = self.dataset_.n_items
-        opt = torch.optim.Adam(net.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        opt = torch.optim.RMSprop(net.parameters(), lr=self.lr)  # matches the original ConsRec
         rng = np.random.default_rng(self.seed)
-        nneg, bs = self.num_negatives, self.batch_size
+        bs = self.batch_size
         net.train()
         for _ in range(self.epochs):
-            # group-item BPR with multiple negatives, minibatched (graph-conv per batch)
-            gp = self._g_pos
-            if gp.shape[0]:
-                order = rng.permutation(gp.shape[0])
-                for s in range(0, gp.shape[0], bs):
-                    b = order[s: s + bs]
+            # group-item BPR: row-minibatched (graph-conv per batch)
+            if self._g_pos.shape[0]:
+                ent, pos, neg = self._expand(self._g_pos, rng)
+                for s in range(0, ent.shape[0], bs):
                     fused = net.fused()
-                    g = torch.as_tensor(np.repeat(gp[b, 0], nneg), device=self.device)
-                    pos = torch.as_tensor(np.repeat(gp[b, 1], nneg), device=self.device)
-                    neg = torch.as_tensor(rng.integers(0, I, size=b.size * nneg), device=self.device)
-                    loss = torch.nn.functional.softplus(net.group_pair(g, neg, fused)
-                                                        - net.group_pair(g, pos, fused)).mean()
+                    g = torch.as_tensor(ent[s: s + bs], device=self.device)
+                    pt = torch.as_tensor(pos[s: s + bs], device=self.device)
+                    nt = torch.as_tensor(neg[s: s + bs], device=self.device)
+                    loss = torch.nn.functional.softplus(net.group_pair(g, nt, fused)
+                                                        - net.group_pair(g, pt, fused)).mean()
                     opt.zero_grad(); loss.backward(); opt.step()
-            # user-item BPR (one full-batch step per epoch)
+            # user-item BPR: row-minibatched (no graph conv; trains shared user/item embs)
             if self.user_item and self._u_pos.shape[0]:
-                u = torch.as_tensor(self._u_pos[:, 0], device=self.device)
-                pos = torch.as_tensor(self._u_pos[:, 1], device=self.device)
-                neg = torch.as_tensor(rng.integers(0, I, size=self._u_pos.shape[0]), device=self.device)
-                loss = torch.nn.functional.softplus(net.user_pair(u, neg) - net.user_pair(u, pos)).mean()
-                opt.zero_grad(); loss.backward(); opt.step()
+                ent, pos, neg = self._expand(self._u_pos, rng)
+                for s in range(0, ent.shape[0], bs):
+                    u = torch.as_tensor(ent[s: s + bs], device=self.device)
+                    pt = torch.as_tensor(pos[s: s + bs], device=self.device)
+                    nt = torch.as_tensor(neg[s: s + bs], device=self.device)
+                    loss = torch.nn.functional.softplus(net.user_pair(u, nt) - net.user_pair(u, pt)).mean()
+                    opt.zero_grad(); loss.backward(); opt.step()
 
     def recommend(self, members, k: int, *, exclude=None, candidates=None) -> np.ndarray:
         if self.net_ is None:
@@ -256,13 +268,18 @@ class ConsRec:
         gi = self._lookup.get(key)
         self.net_.eval()
         with torch.no_grad():
-            group, i_emb = self.net_.fused()
+            if self._fused_cache is None:       # embeddings are static after fit -> cache once
+                self._fused_cache = self.net_.fused()
+            group, i_emb = self._fused_cache
             if gi is None:                      # ephemeral group: fall back to member mean
                 midx = [ui[u] for u in members if u in ui]
                 g_vec = self.net_.user_emb.weight[midx].mean(0) if midx else group.mean(0)
             else:
                 g_vec = group[gi]
-            scores = (g_vec.unsqueeze(0) * i_emb).sum(-1).cpu().numpy()
+            # score with the trained head (MLP or dot) -- a raw dot product would ignore
+            # the learned nonlinear predictor and break the ranking
+            g_mat = g_vec.unsqueeze(0).expand(i_emb.shape[0], -1)
+            scores = self.net_._score(g_mat, i_emb).cpu().numpy()
         if candidates is not None:
             cand = list(candidates)
             cidx = np.array([self.dataset_.item_index[c] for c in cand], dtype=np.int64)

@@ -76,8 +76,8 @@ class AlignGroup:
     paradigm = "profile"
 
     def __init__(self, groups: Groups, group_interactions, *, emb_dim: int = 32,
-                 layers: int = 3, epochs: int = 100, lr: float = 0.001,
-                 num_negatives: int = 8, predictor: str = "DOT", batch_size: int = 512,
+                 layers: int = 4, epochs: int = 100, lr: float = 0.001,
+                 num_negatives: int = 8, predictor: str = "MLP", batch_size: int = 512,
                  cl_weight: float = 0.1, temp: float = 0.2, weight_decay: float = 1e-5,
                  user_item: bool = True, seed: int | None = 0, device: str = "cpu") -> None:
         self.groups = groups
@@ -87,6 +87,7 @@ class AlignGroup:
         self.cl_weight, self.temp = cl_weight, temp
         self.weight_decay, self.user_item, self.seed, self.device = weight_decay, user_item, seed, device
         self.dataset_, self.net_ = None, None
+        self._fused_cache = None
 
     def fit(self, dataset: Dataset) -> "AlignGroup":
         if self.seed is not None:
@@ -107,6 +108,7 @@ class AlignGroup:
         self._g_pos = np.array(gp, dtype=np.int64) if gp else np.zeros((0, 2), np.int64)
         self._u_pos = np.vstack([dataset.interactions["user"].map(ui).to_numpy(),
                                  dataset.interactions["item"].map(ii).to_numpy()]).T
+        self._fused_cache = None
         self._train()
         return self
 
@@ -118,34 +120,46 @@ class AlignGroup:
             rows.append(((emb.max(0).values + emb.min(0).values) / 2))
         return torch.stack(rows)
 
+    def _expand(self, pairs, rng):
+        """num_negatives expansion -> shuffled (entity, pos, neg) rows, like the
+        original get_train_instances + DataLoader (one negative per row)."""
+        ent = np.repeat(pairs[:, 0], self.num_negatives)
+        pos = np.repeat(pairs[:, 1], self.num_negatives)
+        neg = rng.integers(0, self.dataset_.n_items, size=ent.shape[0])
+        perm = rng.permutation(ent.shape[0])
+        return ent[perm], pos[perm], neg[perm]
+
     def _train(self):
-        net, I = self.net_, self.dataset_.n_items
-        opt = torch.optim.Adam(net.parameters(), lr=self.lr, weight_decay=self.weight_decay)
+        self._opt = torch.optim.RMSprop(self.net_.parameters(), lr=self.lr)  # matches the original
         rng = np.random.default_rng(self.seed)
-        nneg, bs = self.num_negatives, self.batch_size
-        net.train()
         for _ in range(self.epochs):
-            gp = self._g_pos
-            if gp.shape[0]:
-                order = rng.permutation(gp.shape[0])
-                for s in range(0, gp.shape[0], bs):
-                    b = order[s: s + bs]
-                    fused = net.fused()
-                    u_emb, _, g_emb = fused
-                    gids = gp[b, 0]
-                    g = torch.as_tensor(np.repeat(gids, nneg), device=self.device)
-                    pos = torch.as_tensor(np.repeat(gp[b, 1], nneg), device=self.device)
-                    neg = torch.as_tensor(rng.integers(0, I, size=b.size * nneg), device=self.device)
-                    bpr = F.softplus(net.group_pair(g, neg, fused) - net.group_pair(g, pos, fused)).mean()
-                    centers = self._centers(gids, u_emb)
-                    cl = net.infonce(centers, g_emb[torch.as_tensor(gids, device=self.device)], self.temp)
-                    loss = bpr + self.cl_weight * cl
-                    opt.zero_grad(); loss.backward(); opt.step()
-            if self.user_item and self._u_pos.shape[0]:
-                u = torch.as_tensor(self._u_pos[:, 0], device=self.device)
-                pos = torch.as_tensor(self._u_pos[:, 1], device=self.device)
-                neg = torch.as_tensor(rng.integers(0, I, size=self._u_pos.shape[0]), device=self.device)
-                loss = F.softplus(net.user_pair(u, neg) - net.user_pair(u, pos)).mean()
+            self._train_epoch(rng)
+
+    def _train_epoch(self, rng):
+        net, opt, bs = self.net_, self._opt, self.batch_size
+        net.train()
+        # group BPR + InfoNCE alignment: row-minibatched (graph conv per batch)
+        if self._g_pos.shape[0]:
+            ent, pos, neg = self._expand(self._g_pos, rng)
+            for s in range(0, ent.shape[0], bs):
+                gids = ent[s: s + bs]
+                fused = net.fused()
+                u_emb, _, g_emb = fused
+                gt = torch.as_tensor(gids, device=self.device)
+                pt = torch.as_tensor(pos[s: s + bs], device=self.device)
+                nt = torch.as_tensor(neg[s: s + bs], device=self.device)
+                bpr = F.softplus(net.group_pair(gt, nt, fused) - net.group_pair(gt, pt, fused)).mean()
+                cl = net.infonce(self._centers(gids, u_emb), g_emb[gt], self.temp)
+                loss = bpr + self.cl_weight * cl
+                opt.zero_grad(); loss.backward(); opt.step()
+        # user-item BPR: row-minibatched (no graph conv; trains shared user/item embs)
+        if self.user_item and self._u_pos.shape[0]:
+            ent, pos, neg = self._expand(self._u_pos, rng)
+            for s in range(0, ent.shape[0], bs):
+                ut = torch.as_tensor(ent[s: s + bs], device=self.device)
+                pt = torch.as_tensor(pos[s: s + bs], device=self.device)
+                nt = torch.as_tensor(neg[s: s + bs], device=self.device)
+                loss = F.softplus(net.user_pair(ut, nt) - net.user_pair(ut, pt)).mean()
                 opt.zero_grad(); loss.backward(); opt.step()
 
     def recommend(self, members, k: int, *, exclude=None, candidates=None) -> np.ndarray:
@@ -156,11 +170,16 @@ class AlignGroup:
         gi = self._lookup.get(key)
         self.net_.eval()
         with torch.no_grad():
-            u_emb, i_emb, g_emb = self.net_.fused()
+            if self._fused_cache is None:       # embeddings are static after fit -> cache once
+                self._fused_cache = self.net_.fused()
+            u_emb, i_emb, g_emb = self._fused_cache
             g_vec = g_emb[gi] if gi is not None else (
                 u_emb[[ui[u] for u in members if u in ui]].mean(0) if any(u in ui for u in members)
                 else g_emb.mean(0))
-            scores = (g_vec.unsqueeze(0) * i_emb).sum(-1).cpu().numpy()
+            # score with the *same* head used in training (MLP predictor or dot) -- a raw
+            # dot product would ignore the learned nonlinear head and break the ranking
+            g_mat = g_vec.unsqueeze(0).expand(i_emb.shape[0], -1)
+            scores = self.net_._score(g_mat, i_emb).cpu().numpy()
         if candidates is not None:
             cand = list(candidates)
             cidx = np.array([self.dataset_.item_index[c] for c in cand], dtype=np.int64)
