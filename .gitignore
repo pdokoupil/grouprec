@@ -22,3 +22,6 @@ dist/
 
 # docs build
 site/
+
+# internal-only paper draft (do not publish)
+docs/demonstration.tex
