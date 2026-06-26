@@ -27,7 +27,7 @@ from typing import Sequence
 import numpy as np
 from scipy.stats import rankdata
 
-from .base import Aggregator, as_score_matrix, available_mask, top_k_indices
+from .base import Aggregator, as_score_matrix, available_mask
 
 
 # --------------------------------------------------------------------------- #

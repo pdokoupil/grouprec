@@ -83,7 +83,6 @@ def render_html(result, path, *, metric: str = "ndcg", k: int | None = None,
     needs a Python server — use Streamlit Community Cloud for that). This page is
     plain HTML/JS and commits straight to a ``gh-pages`` branch / ``docs/`` folder.
     """
-    import pandas as pd
     df = result.load() if hasattr(result, "load") else (
         result.to_frame() if hasattr(result, "to_frame") else result)
     sel = (df["metric"] == metric) & (df["aggregation"] == aggregation) & (df["protocol"] == protocol)

@@ -3,10 +3,8 @@ on a tiny synthetic fixture in the same file format."""
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
-import grouprec as gr
 from grouprec import GroupRecommender, evaluate_sampled
 from grouprec.aggregators import AverageAggregator
 from grouprec.backends import Popularity

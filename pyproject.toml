@@ -54,3 +54,8 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
+
+[tool.ruff.lint]
+# E702: we use `a; b; c` deliberately for compact optimizer steps in training loops.
+# E741: `I` (n_items), etc. are conventional in the recsys/ML code here.
+ignore = ["E702", "E741"]

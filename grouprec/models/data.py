@@ -57,7 +57,6 @@ def make_synthetic_group_data(
                               density=1.0, seed=seed)
     groups = synthetic(data, kind="similar", size=group_size, n=n_groups,
                        metric="pearson", sim_high=0.2, seed=seed)
-    rng = np.random.default_rng(seed)
     R = data.user_item_matrix(value="rating")
 
     group_interactions: dict[int, list] = {}

@@ -31,7 +31,7 @@ from .base import (
     available_mask,
     top_k_indices,
 )
-from .fairness import epfuzzda_select, _member_weights
+from .fairness import epfuzzda_select
 
 
 def rlprop_step(

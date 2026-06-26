@@ -22,7 +22,6 @@ from ..profiling import track_emissions
 from ..data import Dataset, Groups
 from ..eval import evaluate, evaluate_grouplevel, evaluate_sampled, evaluate_sequential
 from ..eval.sequential import LONG_TERM_METRICS
-from ..split import Split
 
 
 @dataclass

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 import grouprec as gr
-from grouprec import Dataset, GroupRecommender, benchmark
+from grouprec import GroupRecommender, benchmark
 from grouprec.bench import BenchmarkTask
 from grouprec.bench.leaderboard import LeaderboardStore
 from grouprec.bench.viz import pareto_front
@@ -140,7 +140,6 @@ def test_profile_first_requires_score_profile():
 
 def test_experiment_context_manager_writes_run_folder(tmp_path):
     import json
-    import pandas as pd
     rd = tmp_path / "run1"
     with gr.Experiment("demo", seed=7, dir=rd, cite=["GFAR"]) as exp:
         exp.log(hr=0.62)
@@ -160,7 +159,7 @@ def test_experiment_context_manager_finalizes_on_error(tmp_path):
     import json
     rd = tmp_path / "boom"
     try:
-        with gr.Experiment("boom", dir=rd) as exp:
+        with gr.Experiment("boom", dir=rd):
             raise ValueError("kaboom")
     except ValueError:
         pass

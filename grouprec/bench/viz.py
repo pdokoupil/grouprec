@@ -56,7 +56,6 @@ def plot_pareto(result, x_metric, y_metric, *, k=None, x_agg="mean", y_agg="min"
         import matplotlib.pyplot as plt
     except ImportError as exc:
         raise ImportError("plot_pareto requires the 'viz' extra: pip install grouprec[viz]") from exc
-    import numpy as np
 
     df = result.to_frame()
     if dataset is not None:

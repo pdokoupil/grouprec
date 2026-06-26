@@ -90,7 +90,6 @@ class Random(_FittedMixin):
 
     def score(self, users, items=None) -> np.ndarray:
         self._check_fitted()
-        cols = self._item_cols(items)
         n_items = self.dataset_.n_items if items is None else len(list(items))
         rng = np.random.default_rng(self.seed)
         return rng.random((len(list(users)), n_items))

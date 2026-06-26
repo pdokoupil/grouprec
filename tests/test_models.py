@@ -7,7 +7,6 @@ import pytest
 
 pytest.importorskip("torch")
 
-import grouprec as gr
 from grouprec import GroupRecommender, benchmark
 from grouprec.bench import BenchmarkTask
 from grouprec.aggregators import AverageAggregator
