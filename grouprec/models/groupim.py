@@ -217,25 +217,49 @@ class GroupIM:
                 loss = net.loss(vecs, mask, target, corrupt, self.device)
                 opt.zero_grad(); loss.backward(); opt.step()
 
-    def recommend(self, members, k: int, *, exclude=None, candidates=None) -> np.ndarray:
+    def group_scores(self, members, items=None, *, member_weights=None,
+                     return_attention=False):
+        """Per-item group scores for a member set.
+
+        ``member_weights`` (one non-negative weight per member, any scale) reweights the
+        attention pooling -- ``g = sum_m w'_m * h_m`` with ``w'_m proportional to
+        w_m * alpha_m`` -- yielding a *steerable* group representation; ``None``/uniform
+        reproduces the native model exactly. With ``return_attention=True`` also returns
+        the per-member pooling weights ``w'`` (an interpretable attribution).
+        """
         if self.net_ is None:
-            raise RuntimeError("GroupIM must be fit() before recommending.")
-        ui = self.dataset_.user_index
+            raise RuntimeError("GroupIM must be fit() before scoring.")
+        ui, ii = self.dataset_.user_index, self.dataset_.item_index
         midx = [ui[u] for u in members if u in ui]
-        self.net_.eval()
+        net = self.net_
+        net.eval()
         with torch.no_grad():
             if midx:
-                vecs = self.M_[midx].unsqueeze(0)             # [1,G,I]
+                vecs = self.M_[midx].unsqueeze(0)                       # [1,M,I]
             else:
                 vecs = torch.zeros(1, 1, self.M_.shape[1], device=self.device)
-            mask = torch.zeros(1, vecs.shape[1], device=self.device)
-            logits, _ = self.net_.group_logits(vecs, mask)
-            scores = logits.squeeze(0).cpu().numpy()
+            embeds = net.encoder(vecs)                                  # [1,M,D]
+            a = torch.tanh(net.aggregator.attention(embeds))           # [1,M,1]
+            w = torch.softmax(a, dim=1).squeeze(0).squeeze(-1)         # [M] native pooling
+            if member_weights is not None:
+                mw = torch.as_tensor(member_weights, dtype=torch.float32, device=self.device)
+                w = w * mw
+                w = w / (w.sum() + 1e-12)
+            g = (embeds.squeeze(0) * w[:, None]).sum(0, keepdim=True)   # [1,D]
+            scores = net.group_predictor(g).squeeze(0).cpu().numpy()
+        if items is not None:
+            scores = scores[np.array([ii[i] for i in items], dtype=np.int64)]
+        return (scores, w.cpu().numpy()) if return_attention else scores
+
+    def recommend(self, members, k: int, *, exclude=None, candidates=None,
+                  member_weights=None) -> np.ndarray:
+        if self.net_ is None:
+            raise RuntimeError("GroupIM must be fit() before recommending.")
         if candidates is not None:
             cand = list(candidates)
-            cidx = np.array([self.dataset_.item_index[c] for c in cand], dtype=np.int64)
-            order = np.argsort(-scores[cidx], kind="stable")[:k]
-            return np.asarray(cand)[order]
+            scores = self.group_scores(members, cand, member_weights=member_weights)
+            return np.asarray(cand)[np.argsort(-scores, kind="stable")[:k]]
+        scores = self.group_scores(members, member_weights=member_weights)
         if exclude:
             ex = [self.dataset_.item_index[i] for i in exclude if i in self.dataset_.item_index]
             scores[ex] = -np.inf

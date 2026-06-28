@@ -73,6 +73,30 @@ def test_groupim_fit_recommend_and_candidates():
     assert len(ranked) == 5 and set(ranked.tolist()) <= set(cands)
 
 
+def test_groupim_group_scores_and_member_weights():
+    gd = data_fixture()
+    m = GroupIM(gd.groups, gd.group_interactions, embedding_dim=16,
+                epochs=3, pretrain_epochs=2, seed=0).fit(gd.dataset)
+    members = gd.groups[0]
+    cands = [int(x) for x in gd.dataset.items[:20]]
+    s = m.group_scores(members, cands)
+    assert s.shape == (len(cands),)
+    # uniform member_weights reproduce the native (None) scoring exactly
+    s_uniform = m.group_scores(members, cands, member_weights=[1.0] * len(members))
+    assert np.allclose(s, s_uniform, atol=1e-5)
+    # return_attention gives one pooling weight per member, summing to ~1
+    _, att_uniform = m.group_scores(members, cands, member_weights=[1.0] * len(members),
+                                    return_attention=True)
+    heavy = [5.0] + [1.0] * (len(members) - 1)
+    _, att_heavy = m.group_scores(members, cands, member_weights=heavy, return_attention=True)
+    assert att_heavy.shape == (len(members),) and abs(float(att_heavy.sum()) - 1.0) < 1e-4
+    # boosting member 0 raises its pooling weight (the steering actually takes effect)
+    assert att_heavy[0] > att_uniform[0]
+    # recommend(member_weights=...) routes through group_scores (steerable)
+    r = m.recommend(members, k=5, candidates=cands, member_weights=[5.0] + [1.0] * (len(members) - 1))
+    assert len(r) == 5 and set(r.tolist()) <= set(cands)
+
+
 def test_groupim_learns_above_random():
     gd = data_fixture()
     m = GroupIM(gd.groups, gd.group_interactions, embedding_dim=32,
