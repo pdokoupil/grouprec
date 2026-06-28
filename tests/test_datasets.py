@@ -18,8 +18,18 @@ from grouprec.datasets import cache
 # --------------------------------------------------------------------------- #
 def test_registry_lists_expected_datasets():
     names = set(gr.datasets.list())
-    assert {"ml-100k", "ml-1m", "ml-25m", "ml-32m", "kgrec", "lastfm",
+    assert {"ml-100k", "ml-1m", "ml-25m", "ml-32m", "ml-latest-small", "kgrec", "lastfm",
             "camra2011", "mafengwo", "weeplaces", "yelp", "douban"} <= names
+
+
+def test_movielens_license_varies_by_release():
+    # older 100k/1m forbid redistribution; newer 25m/32m/latest-small permit it under same terms
+    assert "NO redistribution" in gr.datasets.info("ml-100k").license
+    assert "NO redistribution" in gr.datasets.info("ml-1m").license
+    assert "redistribution allowed" in gr.datasets.info("ml-25m").license
+    spec = gr.datasets.info("ml-latest-small")
+    assert "redistribution allowed" in spec.license
+    assert spec.checksum and len(spec.checksum) == 64       # pinned snapshot for reproducibility
 
 
 def test_info_carries_license_and_citation():

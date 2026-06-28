@@ -112,29 +112,48 @@ def _manual_message(spec: DatasetSpec, ddir: Path, err: str) -> str:
 # registry entries
 # --------------------------------------------------------------------------- #
 _ML = "https://files.grouplens.org/datasets/movielens"
-_GROUPLENS_LICENSE = ("GroupLens / MovieLens usage license "
-                      "(redistribution permitted with conditions; cite, do not re-host)")
+# The MovieLens README license differs by release: the older 100k/1m READMEs forbid
+# redistribution without separate permission, whereas 25m/32m/latest permit redistribution
+# under the same terms. All variants: research use only, must cite, no commercial use
+# without permission. We never re-host the bytes (we fetch from the canonical GroupLens host).
+_ML_LICENSE_NOREDIST = ("GroupLens/MovieLens license (research use; must cite; "
+                        "NO redistribution without permission; no commercial use without permission)")
+_ML_LICENSE_REDIST = ("GroupLens/MovieLens license (research use; must cite; "
+                      "redistribution allowed under the same terms; no commercial use without permission)")
 
 register(DatasetSpec(
-    name="ml-100k", scenario=1, policy="auto", license=_GROUPLENS_LICENSE,
+    name="ml-100k", scenario=1, policy="auto", license=_ML_LICENSE_NOREDIST,
     citation="Harper & Konstan 2015, The MovieLens Datasets, ACM TiiS",
     homepage="https://grouplens.org/datasets/movielens/100k/",
     urls=[f"{_ML}/ml-100k.zip"], loader=loaders.movielens_100k,
 ))
 register(DatasetSpec(
-    name="ml-1m", scenario=1, policy="auto", license=_GROUPLENS_LICENSE,
+    name="ml-1m", scenario=1, policy="auto", license=_ML_LICENSE_NOREDIST,
     citation="Harper & Konstan 2015, The MovieLens Datasets, ACM TiiS",
     homepage="https://grouplens.org/datasets/movielens/1m/",
     urls=[f"{_ML}/ml-1m.zip"], loader=loaders.movielens_1m,
 ))
 register(DatasetSpec(
-    name="ml-25m", scenario=1, policy="auto", license=_GROUPLENS_LICENSE,
+    # ml-latest-small is a ROLLING release (GroupLens updates it over time and explicitly
+    # says it is NOT for reporting results). For reproducibility we PIN the exact snapshot by
+    # sha256 -- download() raises on mismatch, so a future re-pointed release is caught rather
+    # than silently used. `notes` records the retrieval date of the pinned snapshot.
+    name="ml-latest-small", scenario=1, policy="auto", license=_ML_LICENSE_REDIST,
+    citation="Harper & Konstan 2015, The MovieLens Datasets, ACM TiiS",
+    homepage="https://grouplens.org/datasets/movielens/latest/",
+    urls=[f"{_ML}/ml-latest-small.zip"], loader=loaders.movielens_latest_small,
+    checksum="696d65a3dfceac7c45750ad32df2c259311949efec81f0f144fdfb91ebc9e436",  # snapshot pin
+    notes="Rolling 'latest-small' release; pinned by sha256 (retrieved 2026-06-27). "
+          "Redistribution-permitting license, so titles may be baked into the published demo.",
+))
+register(DatasetSpec(
+    name="ml-25m", scenario=1, policy="auto", license=_ML_LICENSE_REDIST,
     citation="Harper & Konstan 2015, The MovieLens Datasets, ACM TiiS",
     homepage="https://grouplens.org/datasets/movielens/25m/",
     urls=[f"{_ML}/ml-25m.zip"], loader=loaders.movielens_25m,
 ))
 register(DatasetSpec(
-    name="ml-32m", scenario=1, policy="auto", license=_GROUPLENS_LICENSE,
+    name="ml-32m", scenario=1, policy="auto", license=_ML_LICENSE_REDIST,
     citation="Harper & Konstan 2015, The MovieLens Datasets, ACM TiiS",
     homepage="https://grouplens.org/datasets/movielens/32m/",
     urls=[f"{_ML}/ml-32m.zip"], loader=loaders.movielens_32m,

@@ -44,6 +44,10 @@ def _movielens_csv(root: Path, name: str) -> Dataset:
     return Dataset(df[["user", "item", "rating", "timestamp"]], name=name)
 
 
+def movielens_latest_small(root: Path) -> Dataset:
+    return _movielens_csv(root, "ml-latest-small")
+
+
 def movielens_25m(root: Path) -> Dataset:
     return _movielens_csv(root, "ml-25m")
 
