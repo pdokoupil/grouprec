@@ -24,24 +24,28 @@ similar   = gr.groups.synthetic(data, kind="similar",   size=3, n=3, seed=0)
 divergent = gr.groups.synthetic(data, kind="divergent", size=3, n=3, seed=0)
 outlier   = gr.groups.synthetic(data, kind="outlier",   size=3, n=3, seed=0)
 
-# 3a. group recommendation via aggregators (results-aggregation)
-rec = GroupRecommender(EASE(reg=200.0),
-                       WeightedAverageAggregator(member_weights=[0.6, 0.3, 0.1]))
+# 3a. group recommendation via aggregators (results-aggregation), steered by member weights
+rec = GroupRecommender(EASE(reg=200.0), WeightedAverageAggregator(member_weights=[0.6, 0.3, 0.1]))
 rec.fit(data)
 rec.recommend(members, k=5, candidates=cands)        # ranked item ids
-
 # swap the aggregator for fairness:
 rec = GroupRecommender(EASE(reg=200.0), EPFuzzDAAggregator(member_weights=w)).fit(data)
 
-# 3b. group recommendation via a deep model (profile-aggregation)
+# 3b. group recommendation via a deep model (profile-aggregation), steered by member weights
 gim = GroupIM(groups, group_interactions, epochs=40).fit(data)
-gim.recommend(members, k=5, candidates=cands)
+gim.recommend(members, k=5, candidates=cands, member_weights=w)
+gim.group_scores(members, cands, member_weights=w)   # per-item scores (used by the demo)
 ```
 
-The build script uses exactly these components. For the precomputed weight grid it
-calls the aggregator classes directly on the framework-normalised score matrix
-(`normalize_mgains(EASE.score(members, cands), "minmax")`), which is what
-`GroupRecommender.recommend` does internally.
+**What is genuinely the framework vs. demo glue.** Every *ranking* the explorer shows is a
+real `grouprec` call: the aggregators go through `GroupRecommender` (we keep one instance with
+a pre-fitted EASE base and swap its weighted aggregator per weight combo), and the deep model
+through `GroupIM.group_scores(member_weights=...)`. Around those calls the generator adds, as
+ordinary application code: parsing MovieLens `movies.csv` for titles/genres; deriving each
+group's consensus items; candidate sampling; the Top-K SAE (adapted from `umap2026/sae.py`,
+**external to grouprec**); and baking a 125-point weight grid into JSON. So the framework does
+the recommendation; the script does data prep, the SAE explanation layer, and packaging
+(~400 lines). The snippet above is the essence, not the whole script.
 
 ## Groups
 
@@ -74,10 +78,11 @@ the greedy aggregators live, weight-dependent outputs are **precomputed on a gri
 (`{0, ¼, ½, ¾, 1}³ = 125` combinations per group per method) and the slider snaps to the
 nearest grid point — so every ranking shown is a genuine framework output:
 
-* **Weighted average** — `WeightedAverageAggregator` (score grid).
-* **EP-FuzzDA** — `EPFuzzDAAggregator` (selection-order grid).
-* **GroupIM** — real forward pass with the influence weight injected into its attention
-  aggregator, `α'_m ∝ w_m·α_m`, reducing to the native model at equal weights.
+* **Weighted average / EP-FuzzDA** — `GroupRecommender.recommend` with the framework
+  `WeightedAverageAggregator` / `EPFuzzDAAggregator` (`member_weights`); a selection ordering.
+* **GroupIM** — `GroupIM.group_scores(members, items, member_weights=…)`, a real forward pass
+  that reweights the model's attention pooling (`α'_m ∝ w_m·α_m`), reducing to the native model
+  at equal weights.
 
 AGREE is intentionally omitted: its non-linear NCF head makes member-level steering weak.
 Least-misery / most-pleasure / Borda are omitted because they are weight-agnostic; LTP and
