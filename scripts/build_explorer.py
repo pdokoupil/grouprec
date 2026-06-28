@@ -40,6 +40,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import itertools
 import json
 from collections import Counter
@@ -55,6 +56,9 @@ from grouprec.backends import EASE
 from grouprec.models import GroupIM
 from grouprec.aggregators import WeightedAverageAggregator, EPFuzzDAAggregator
 from grouprec.aggregators._normalize import normalize_mgains
+from grouprec.datasets.cache import dataset_dir
+
+DATASET = "ml-latest-small"   # redistribution-permitting MovieLens release (titles can be published)
 
 # ---- config --------------------------------------------------------------- #
 GROUP_PLAN = [("similar", 3), ("divergent", 3), ("outlier", 3)]   # regime -> count
@@ -103,16 +107,29 @@ def _norm_combo(levels):
 # MovieLens metadata
 # --------------------------------------------------------------------------- #
 def load_movielens_metadata():
-    base = Path.home() / "Library/Caches/grouprec/ml-100k/ml-100k"
-    genres = [ln.split("|")[0] for ln in (base / "u.genre").read_text(encoding="latin-1").splitlines() if "|" in ln]
-    titles, genre_vecs = {}, {}
-    for line in (base / "u.item").read_text(encoding="latin-1").splitlines():
-        if not line.strip():
-            continue
-        f = line.split("|")
-        iid = int(f[0])
-        titles[iid] = f[1]
-        genre_vecs[iid] = np.array([int(x) for x in f[5:5 + len(genres)]], dtype=float)
+    """Parse the ml-latest-small ``movies.csv`` (movieId, title, pipe-separated genres).
+    Located via the framework cache so it honors GROUPREC_CACHE and the pinned snapshot."""
+    mv = next(dataset_dir(DATASET).rglob("movies.csv"))
+    titles, gsets, vocab = {}, {}, []
+    with open(mv, encoding="utf-8") as f:
+        reader = csv.reader(f)
+        next(reader)                                            # header
+        for mid, title, gstr in reader:
+            mid = int(mid)
+            titles[mid] = title
+            gs = [g for g in gstr.split("|") if g and g != "(no genres listed)"]
+            gsets[mid] = gs
+            for g in gs:
+                if g not in vocab:
+                    vocab.append(g)
+    genres = sorted(vocab)
+    gidx = {g: i for i, g in enumerate(genres)}
+    genre_vecs = {}
+    for mid, gs in gsets.items():
+        v = np.zeros(len(genres), dtype=float)
+        for g in gs:
+            v[gidx[g]] = 1.0
+        genre_vecs[mid] = v
     return genres, titles, genre_vecs
 
 
@@ -223,8 +240,8 @@ def build_epfuzzda_order_grid(rm):
 # main build
 # --------------------------------------------------------------------------- #
 def build(out: Path) -> None:
+    data = gr.datasets.load(DATASET)                 # downloads+extracts (pinned snapshot)
     genres, titles, genre_vecs = load_movielens_metadata()
-    data = gr.datasets.load("ml-100k")
     ui, ii = data.user_index, data.item_index
     items_arr = data.items
     inter = data.interactions
@@ -348,7 +365,7 @@ def build(out: Path) -> None:
         print(f"  [group {gslot + 1}/{len(chosen)}] {kind} users={mset} coh={cohesions[gslot]:.2f} consensus={len(cons)}")
 
     payload = {
-        "dataset": "MovieLens-100k",
+        "dataset": "MovieLens latest-small",
         "algorithms": ALGORITHMS, "scoreKeys": SCORE_KEYS, "orderKeys": ORDER_KEYS, "e2eKeys": E2E_KEYS,
         "gridLevels": GRID_LEVELS,
         "titles": {str(it): titles.get(it, f"Item {it}")
@@ -433,7 +450,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body>
 <h1>Group recommendation explorer</h1>
-<p class="subtitle">Real MovieLens-100k · groups from <code>gr.groups.synthetic</code> (similar / divergent / outlier) with consensus-derived interactions · the slider is each member's <b>importance weight</b> (normalised to sum to 100%)</p>
+<p class="subtitle">Real MovieLens (latest-small) · groups from <code>gr.groups.synthetic</code> (similar / divergent / outlier) with consensus-derived interactions · the slider is each member's <b>importance weight</b> (normalised to sum to 100%)</p>
 
 <div class="controls">
   <select id="algo-select" onchange="onAlgo()"></select>
@@ -472,6 +489,11 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </div>
 <div class="tip" id="tip"></div>
+<p style="font-size:11px;color:var(--text-muted);margin-top:20px;line-height:1.5">
+  Built with <b>grouprec</b>. Data: the <a href="https://grouplens.org/datasets/movielens/" style="color:var(--accent)">MovieLens</a>
+  latest-small dataset (F. Maxwell Harper and Joseph A. Konstan. 2015. The MovieLens Datasets. ACM TiiS),
+  courtesy of GroupLens, used under its usage license (redistribution permitted under the same terms).
+</p>
 
 <script>
 const DATA = /*__DATA__*/;
