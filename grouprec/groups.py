@@ -64,9 +64,12 @@ def similarity_matrix(data: Dataset, metric="pearson") -> np.ndarray:
     return s
 
 
-def _build_predicate_group(sim, size, predicate, rng, max_tries):
+def build_predicate_group(sim, size, predicate, rng, max_tries=1000):
     """Grow a group of ``size`` users where each added member satisfies ``predicate``
-    against *all* current members. Returns user indices or ``None`` if it stalls."""
+    against *all* current members. Returns user indices or ``None`` if it stalls.
+
+    Public building block for custom ``kind`` callables: ``predicate(row)`` is a boolean
+    mask over a similarity row (e.g. ``lambda r: r >= 0.3`` for "similar")."""
     n = sim.shape[0]
     for _ in range(max_tries):
         seed_user = int(rng.integers(n))
@@ -107,43 +110,52 @@ def synthetic(
     if size < 2:
         raise ValueError("group size must be >= 2.")
     rng = np.random.default_rng(seed)
+    kind_name = kind if isinstance(kind, str) else getattr(kind, "__name__", "custom")
 
     if kind == "random":
         members = [np.sort(data.users[rng.choice(data.n_users, size=size, replace=False)])
                    for _ in range(n)]
-        return Groups(members, metadata=_meta(kind, size, n, metric, seed, sim_high, sim_low))
+        return Groups(members, metadata=_meta(kind_name, size, n, metric, seed, sim_high, sim_low))
 
     sim = similarity_matrix(data, metric)
     high = lambda row: row >= sim_high  # noqa: E731
     low = lambda row: row <= sim_low    # noqa: E731
 
+    # A "kind" is a builder ``f(sim, size, rng) -> list[int] | None`` (member indices, or
+    # None if it stalls). Custom kinds (e.g. a 2+2 clustered group) plug in here exactly as a
+    # custom ``metric`` does -- see ``build_predicate_group`` / ``build_outlier_group`` and docs.
+    if callable(kind):
+        builder = lambda: kind(sim, size, rng)                          # noqa: E731
+    elif kind == "similar":
+        builder = lambda: build_predicate_group(sim, size, high, rng, max_tries)      # noqa: E731
+    elif kind in ("divergent", "dissimilar"):
+        builder = lambda: build_predicate_group(sim, size, low, rng, max_tries)       # noqa: E731
+    elif kind == "outlier":
+        builder = lambda: build_outlier_group(sim, size, high, low, rng, max_tries)   # noqa: E731
+    else:
+        raise ValueError(f"unknown kind {kind!r}; use a builtin name or a callable builder.")
+
     members: list[np.ndarray] = []
     for _ in range(n):
-        if kind == "similar":
-            idx = _build_predicate_group(sim, size, high, rng, max_tries)
-        elif kind in ("divergent", "dissimilar"):
-            idx = _build_predicate_group(sim, size, low, rng, max_tries)
-        elif kind == "outlier":
-            idx = _build_outlier_group(sim, size, high, low, rng, max_tries)
-        else:
-            raise ValueError(f"unknown kind {kind!r}.")
+        idx = builder()
         if idx is None:
             break
         members.append(np.sort(data.users[np.asarray(idx)]))
 
     if not members:
         raise RuntimeError(
-            f"could not form any '{kind}' group of size {size} "
+            f"could not form any '{kind_name}' group of size {size} "
             f"(metric={metric}, sim_high={sim_high}, sim_low={sim_low}); "
-            "try a different metric or thresholds."
+            "try a different metric, thresholds, or builder."
         )
-    return Groups(members, metadata=_meta(kind, size, n, metric, seed, sim_high, sim_low))
+    return Groups(members, metadata=_meta(kind_name, size, n, metric, seed, sim_high, sim_low))
 
 
-def _build_outlier_group(sim, size, high, low, rng, max_tries):
-    """A similar core of ``size-1`` plus one member divergent to all of them."""
+def build_outlier_group(sim, size, high, low, rng, max_tries=1000):
+    """A similar core of ``size-1`` plus one member divergent to all of them.
+    Public building block for custom ``kind`` callables."""
     for _ in range(max_tries):
-        core = _build_predicate_group(sim, size - 1, high, rng, max_tries=50)
+        core = build_predicate_group(sim, size - 1, high, rng, max_tries=50)
         if core is None:
             continue
         cand_mask = np.ones(sim.shape[0], dtype=bool)

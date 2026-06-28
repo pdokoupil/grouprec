@@ -7,7 +7,33 @@ import numpy as np
 import pytest
 
 from grouprec import make_blobs_dataset
-from grouprec.groups import synthetic, similarity_matrix
+from grouprec.groups import (
+    synthetic, similarity_matrix, build_predicate_group, build_outlier_group,
+)
+
+
+def test_kind_callable_custom_builder():
+    """A custom 'kind' builder (sim, size, rng) -> indices plugs in like a custom metric."""
+    d = clustered()
+
+    def first_two(sim, size, rng):                 # trivial deterministic builder
+        return [0, 1][:size]
+
+    g = synthetic(d, kind=first_two, size=2, n=3, seed=0)
+    assert len(g) == 3
+    assert g.metadata["kind"] == "first_two"       # provenance records the builder name
+    # public building blocks are exposed for composition
+    sim = similarity_matrix(d, "pearson")
+    rng = np.random.default_rng(0)
+    idx = build_predicate_group(sim, 2, lambda r: r >= -1.0, rng)   # always-satisfiable
+    assert idx is not None and len(idx) == 2
+    assert callable(build_outlier_group)
+
+
+def test_kind_unknown_string_raises():
+    d = clustered()
+    with pytest.raises(ValueError, match="unknown kind"):
+        synthetic(d, kind="banana", size=2, n=1)
 
 
 def clustered():
