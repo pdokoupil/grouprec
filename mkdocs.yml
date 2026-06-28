@@ -11,7 +11,9 @@ nav:
   - Datasets & licensing: datasets.md
   - Evaluation & the rift: evaluation.md
   - Reproducibility: reproducibility.md
-  - Extending (add algorithm/dataset/metric): extending.md
+  - Extending (algorithm/dataset/metric/group kind): extending.md
+  - Integration (LensKit / RecBole / implicit): integration.md
+  - Interactive explorer: EXPLORER.md
   - Leaderboard: leaderboard.md
 markdown_extensions:
   - admonition
