@@ -102,7 +102,8 @@ _REFS: dict[str, str] = {
 
 # aggregator short-name -> citation key (many social-choice ones share one reference)
 _AGG_KEYS: dict[str, str] = {
-    "ADD": "social_choice", "AVG": "social_choice", "LMS": "social_choice",
+    "ADD": "social_choice", "AVG": "social_choice", "wAVG": "social_choice",
+    "LMS": "social_choice",
     "MUL": "social_choice", "MPL": "social_choice", "AVGNM": "social_choice",
     "BDC": "social_choice", "FAI": "social_choice", "PeriodicFAI": "social_choice",
     "GFAR": "GFAR", "EPFuzzDA": "EPFuzzDA", "EPFuzzDAWeighted": "EPFuzzDA",
@@ -113,7 +114,7 @@ _AGG_KEYS: dict[str, str] = {
 # dataset name (lower-cased) -> citation key
 _DATASET_KEYS: dict[str, str] = {
     "ml-100k": "movielens", "ml-1m": "movielens", "ml-25m": "movielens",
-    "ml-32m": "movielens", "kgrec": "kgrec", "lastfm": "lastfm",
+    "ml-32m": "movielens", "ml-latest-small": "movielens", "kgrec": "kgrec", "lastfm": "lastfm",
     "lastfm-tasteprofile": "lastfm", "weeplaces": "weeplaces", "mafengwo": "mafengwo",
     "camra2011": "camra2011", "yelp": "yelp", "douban": "douban",
 }
