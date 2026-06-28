@@ -108,7 +108,7 @@ gd   = gr.datasets.load_yin(gr.datasets.fetch_yin(accept_license=True), "yelp")
 
 | Policy | Datasets | Behavior |
 |---|---|---|
-| `auto` | MovieLens 100K/1M/25M/32M | fetched automatically (GroupLens license permits it) |
+| `auto` | MovieLens 100K/1M/25M/32M/latest-small | fetched for your own use (GroupLens permits research download; *redistribution* terms differ by release — 100K/1M forbid it, 25M/latest allow it under same terms) |
 | `auto_nc` | KGRec, Last.fm, Yelp-LA, Douban-SH | non-commercial — fetched only after `accept_license=True`, citations surfaced |
 | `manual` | CAMRa2011, Mafengwo, Weeplaces | redistribution unclear — `load` prints where to download |
 
