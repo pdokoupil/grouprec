@@ -17,7 +17,7 @@ from grouprec.aggregators._normalize import normalize_mgains
 from grouprec.models import GroupIM
 
 # 1. dataset processing (download + parse + vocab) — one call
-data = gr.datasets.load("ml-100k")
+data = gr.datasets.load("ml-latest-small")   # redistribution-permitting MovieLens release
 
 # 2. synthetic group generation — random / similar / divergent / outlier, size K
 similar   = gr.groups.synthetic(data, kind="similar",   size=3, n=3, seed=0)
@@ -91,10 +91,33 @@ member weights.
   the member).
 * **GroupIM**: the model's native pooling attention, scaled by the slider weight.
 
-## Latent concepts
+## Latent concepts (how the SAE was adopted)
 
-A Top-K sparse autoencoder (à la `umap2026/sae.py`) is fit on the recommender's item
-embeddings; each feature is labelled by the dominant genre of its top items. A member is
-tagged with a concept because the films they watched activate it — the films listed beside
-the concept are its global exemplars, so they need not be in the member's own history.
-The SAE is only an *explanation of members*; it is not part of the models' steering.
+We reuse the **Top-K sparse autoencoder** from `umap2026/sae.py` and adapt it minimally:
+standardised input, an L2-unit-norm decoder, ReLU encoder, and a hard **top-K=6** activation
+(so each embedding is explained by at most 6 latent atoms), trained with MSE + a small L1
+penalty. We fit it on **GroupIM's item embeddings** — the rows of its `group_predictor`
+weight matrix, i.e. one learned vector per movie. Each latent feature is then **named by the
+dominant genre** of its top-activating movies (using the `movies.csv` genre labels), turning
+opaque dimensions into readable concepts (e.g. "Sci-Fi / Drama"). A member is tagged with a
+concept because the films they watched activate it; the films listed beside a concept are its
+global exemplars, so they need not be in the member's own history. The SAE is only an
+*explanation of members* — it is **not** part of the models' steering.
+
+## How the data is shipped (offline → one file)
+
+Everything above is computed **once, offline**, by `build_explorer.py`, then **baked into a
+single HTML** — there is no server and no API call at view time:
+
+1. The script fits the recommenders and computes, per group: the per-member score matrix, the
+   125-point weight grids (real aggregator orderings / real GroupIM forward passes), the SAE
+   concepts, and the displayed subsets.
+2. It assembles one Python `dict` (`payload`) and serialises it with `json.dumps`.
+3. That JSON is **string-substituted** into a placeholder (`const DATA = /*__DATA__*/;`) inside
+   an HTML template, producing one self-contained file (~1 MB; the JSON is a single long line).
+4. In the browser, the page reads `DATA` and renders/re-ranks entirely client-side; dragging a
+   slider just looks up the nearest precomputed grid point.
+
+So the artifact is "compute with grouprec offline → embed as JSON → static page". Reproduce it
+with `python scripts/build_explorer.py`. (The generation logic is ~400 lines of Python on the
+public API; the embedded data, not lines of code, is what makes the file large.)

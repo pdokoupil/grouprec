@@ -389,7 +389,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Group Recommendation Explorer — MovieLens-100k</title>
+<title>Group Recommendation Explorer — MovieLens (latest-small)</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root{--bg:#f8f7f3;--surface:#fff;--surface1:#f1efe8;--border:rgba(0,0,0,.12);
@@ -446,12 +446,29 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   .legend-dot{width:10px;height:10px;border-radius:50%}
   .chart-wrap{margin-top:14px;background:var(--surface);border:.5px solid var(--border);border-radius:12px;padding:12px 14px}
   .tip{position:fixed;pointer-events:none;background:var(--text);color:var(--bg);font-size:11px;padding:4px 7px;border-radius:5px;opacity:0;transition:opacity .12s;z-index:10;white-space:nowrap}
+  .viewtabs{display:flex;gap:6px;margin-bottom:16px}
+  .viewtabs .tab-btn{font-size:13px;padding:6px 14px}
+  .about{max-width:860px}
+  .about h3{font-size:13px;margin:18px 0 6px;color:var(--text)}
+  .about p,.about li{font-size:12.5px;color:var(--text-sec);line-height:1.6}
+  .about ol,.about ul{margin:4px 0 4px 18px}
+  .about code{background:var(--surface1);padding:1px 4px;border-radius:4px;font-size:11.5px}
+  .about pre{background:var(--surface1);border:.5px solid var(--border);border-radius:8px;padding:10px 12px;overflow:auto;font-size:11px;line-height:1.5;margin:6px 0}
+  .about table{border-collapse:collapse;font-size:12px;margin:6px 0}
+  .about th,.about td{border:.5px solid var(--border);padding:5px 9px;text-align:left;vertical-align:top}
+  .about th{background:var(--surface1)}
 </style>
 </head>
 <body>
 <h1>Group recommendation explorer</h1>
 <p class="subtitle">Real MovieLens (latest-small) · groups from <code>gr.groups.synthetic</code> (similar / divergent / outlier) with consensus-derived interactions · the slider is each member's <b>importance weight</b> (normalised to sum to 100%)</p>
 
+<div class="viewtabs">
+  <button class="tab-btn active" id="vt-explorer" onclick="setView('explorer')">Explorer</button>
+  <button class="tab-btn" id="vt-about" onclick="setView('about')">How it's built</button>
+</div>
+
+<div id="view-explorer">
 <div class="controls">
   <select id="algo-select" onchange="onAlgo()"></select>
   <span id="algo-badge" class="badge"></span>
@@ -488,6 +505,85 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
   </div>
 </div>
+</div><!-- /view-explorer -->
+
+<div id="view-about" class="about" style="display:none">
+  <p>This page is a <b>case study</b> for the <b>grouprec</b> toolkit: a group recommendation pipeline
+  built end-to-end from the library's public API. <b>Everything shown is real</b> — no mock score
+  matrices — computed <b>offline</b> once and then <b>baked into this single self-contained file</b>
+  (no server, no API calls at view time).</p>
+
+  <h3>1 · Built from the framework</h3>
+  <p>Dataset processing, group generation, normalisation, the aggregators and the deep model are all
+  reused from <code>grouprec</code>; the build script only orchestrates them:</p>
+  <pre>import grouprec as gr
+from grouprec import GroupRecommender
+from grouprec.backends import EASE
+from grouprec.aggregators import WeightedAverageAggregator, EPFuzzDAAggregator
+from grouprec.models import GroupIM
+
+data   = gr.datasets.load("ml-latest-small")                          # 1. data (license-aware)
+groups = gr.groups.synthetic(data, kind="divergent", size=3, n=3)    # 2. group generation
+rec    = GroupRecommender(EASE(), WeightedAverageAggregator(member_weights=w))
+rec.fit(data); rec.recommend(members, k=5, candidates=cands)         # 3. group recommendation</pre>
+
+  <h3>2 · How the data is shipped (offline → one file)</h3>
+  <ol>
+    <li>Fit the recommenders; compute per group: the per-member score matrix, the 125-point
+        influence-weight grids (real aggregator orderings / real GroupIM forward passes), the SAE
+        concepts, and the displayed subsets.</li>
+    <li>Assemble one Python <code>dict</code> and serialise it with <code>json.dumps</code>.</li>
+    <li>Substitute that JSON into a placeholder (<code>const DATA = /*…*/;</code>) in an HTML template
+        → one self-contained file (~1&nbsp;MB; the JSON is a single long line, which is what makes the
+        file large — the generation logic itself is ~400 lines of Python).</li>
+    <li>In your browser, the page reads <code>DATA</code> and renders/re-ranks entirely client-side;
+        a slider just looks up the nearest precomputed grid point.</li>
+  </ol>
+
+  <h3>3 · Groups (generated, not hand-picked)</h3>
+  <p>Membership comes from <code>gr.groups.synthetic</code> in three regimes — <b>similar</b>,
+  <b>divergent</b>, <b>outlier</b> (three each), badged with the measured mean pairwise rating
+  correlation. A group's interactions are <b>derived, not simulated</b>: the <b>consensus items</b>
+  (rated ≥4 by ≥2 of 3 members) — a deterministic function of the real ratings.</p>
+
+  <h3>4 · Algorithms &amp; faithful interactivity</h3>
+  <p>The slider is each member's importance weight (normalised to 100%). Outputs are precomputed on a
+  <code>{0,¼,½,¾,1}³ = 125</code>-point grid and the slider snaps to the nearest point, so every
+  ranking is a genuine output:</p>
+  <ul>
+    <li><b>Weighted average</b> — grouprec <code>WeightedAverageAggregator</code>.</li>
+    <li><b>EP-FuzzDA</b> — grouprec <code>EPFuzzDAAggregator</code> (a fairness aggregator; the weight
+        is each member's target share).</li>
+    <li><b>GroupIM</b> — a real deep-model forward pass with the weight injected into its attention
+        pooling (<code>α'<sub>m</sub> ∝ w<sub>m</sub>·α<sub>m</sub></code>), reducing to the native
+        model at equal weights. Steering is injected into the model's pooling — <b>not</b> via the SAE.</li>
+  </ul>
+  <p>Weight-agnostic rules (least-misery/most-pleasure/Borda) are excluded; so are LTP (≈EP-FuzzDA in
+  single-shot) and AGREE (its non-linear head steers weakly).</p>
+
+  <h3>5 · Latent concepts (how the SAE was adopted)</h3>
+  <p>We reuse a <b>Top-K sparse autoencoder</b> (standardised input, unit-norm decoder, ReLU encoder,
+  hard top-K=6, MSE + small L1) and fit it on <b>GroupIM's item embeddings</b> (the rows of its
+  <code>group_predictor</code> weight — one vector per movie). Each latent feature is <b>named by the
+  dominant genre</b> of its top-activating movies, turning opaque dimensions into readable concepts.
+  A member is tagged with a concept because the films they watched activate it; the films listed are
+  the concept's global <b>exemplars</b>, so they may differ from the member's own history. The SAE is
+  only an explanation of members.</p>
+
+  <h3>6 · Every displayed subset is deterministic</h3>
+  <table>
+    <tr><th>Subset</th><th>Rule (ties: ascending index, <code>argsort kind="stable"</code>)</th></tr>
+    <tr><td>Member history (3)</td><td>top-3 by rating; ties by item id</td></tr>
+    <tr><td>Candidate pool (50)</td><td>consensus positive + 49 negatives sampled uniformly (per-group seed) from items no member rated</td></tr>
+    <tr><td>Recs received (3)</td><td>member's top-3 candidates by EASE score</td></tr>
+    <tr><td>Top-5 recs</td><td>top-5 by group score / selection order</td></tr>
+    <tr><td>Latent concepts (3)</td><td>SAE features with highest mean activation over the member's items</td></tr>
+    <tr><td>Concept exemplars (3)</td><td>items with highest activation for the feature</td></tr>
+  </table>
+  <p style="margin-top:14px">Reproduce with <code>python scripts/build_explorer.py</code>. Full write-up:
+  <code>docs/EXPLORER.md</code> in the repository.</p>
+</div>
+
 <div class="tip" id="tip"></div>
 <p style="font-size:11px;color:var(--text-muted);margin-top:20px;line-height:1.5">
   Built with <b>grouprec</b>. Data: the <a href="https://grouplens.org/datasets/movielens/" style="color:var(--accent)">MovieLens</a>
@@ -636,6 +732,12 @@ function showTip(e,t){ tip.textContent=t; tip.style.opacity=1; const w=tip.offse
   tip.style.left=Math.max(4,x)+'px'; tip.style.top=(e.clientY+12)+'px'; }
 function hideTip(){ tip.style.opacity=0; }
 function renderAll(){ renderControls(); renderUsers(); renderRecs(); renderChart(); renderAttr(); renderLegend(); }
+function setView(v){
+  document.getElementById('view-explorer').style.display = v==='explorer' ? '' : 'none';
+  document.getElementById('view-about').style.display = v==='about' ? '' : 'none';
+  document.getElementById('vt-explorer').classList.toggle('active', v==='explorer');
+  document.getElementById('vt-about').classList.toggle('active', v==='about');
+}
 initControls(); resetWeights();
 </script>
 </body>
