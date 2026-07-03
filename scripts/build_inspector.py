@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Build the *real-data* group-recommendation explorer (self-contained HTML).
+"""Build the *real-data* group-recommendation inspector (self-contained HTML).
 
 Dataset: MovieLens latest-small (real titles + genres -> interpretable items & concepts;
 its license permits redistribution, so titles can be published).
@@ -15,6 +15,7 @@ through ``GroupRecommender`` and the deep model through ``GroupIM.group_scores``
 
     data   = gr.datasets.load("ml-latest-small")
     groups = gr.groups.synthetic(data, kind="divergent", size=3, n=3, seed=0)
+    gints  = gr.groups.derive_group_interactions(data, groups)   # per-group signal (majority, overridable)
     ease   = EASE(reg=200.0).fit(data)
 
     # results-aggregation (utilitarian / fairness), steered by per-member weights:
@@ -22,19 +23,21 @@ through ``GroupRecommender`` and the deep model through ``GroupIM.group_scores``
     rec.recommend(members, k=5, candidates=cands)
 
     # profile-aggregation deep model, steered by per-member weights:
-    gim = GroupIM(groups, group_interactions).fit(data)
+    gim = GroupIM(groups, gints).fit(data)
     gim.group_scores(members, cands, member_weights=w)        # or gim.recommend(..., member_weights=w)
 
 This script is NOT four lines: around those real calls it adds (a) parsing MovieLens
-``movies.csv`` for titles/genres, (b) deriving each group's consensus items, (c) candidate
-sampling, (d) a Top-K SAE (adapted from umap2026, NOT part of grouprec) for the latent
-concepts, and (e) baking a 125-point member-weight grid into one JSON blob -- ~400 lines
-total. The snippet above is the *essence*; this file is the full generator.
+``movies.csv`` for titles/genres, (b) candidate sampling, (c) a Top-K SAE (adapted from
+umap2026, NOT part of grouprec) for the latent concepts, and (d) baking a 125-point
+member-weight grid into one JSON blob -- ~400 lines total. The snippet above is the
+*essence*; this file is the full generator.
 
 Honest notes:
 * Group membership: ``gr.groups.synthetic`` in three regimes (similar/divergent/outlier, 3 each),
   tagged with regime + measured mean pairwise rating correlation.
-* Group interactions are DERIVED (consensus items: rated >=4 by >=2 members), not simulated.
+* Group interactions are DERIVED, not simulated, through the framework's
+  ``gr.groups.derive_group_interactions`` (default majority rule: item liked by >=2 members,
+  like = rating >=4; the rule is overridable via a predicate).
 * Aggregator rankings come from the real ``GroupRecommender`` pipeline with the framework
   ``WeightedAverageAggregator`` / ``EPFuzzDAAggregator`` (member_weights); the slider snaps to the
   nearest grid point.
@@ -45,7 +48,7 @@ Honest notes:
   embeddings, labelled by genre. This is an *explanation* layer, not a grouprec component.
 
 Usage:
-    python scripts/build_explorer.py --out docs/group_rec_explorer.html
+    python scripts/build_inspector.py --out docs/group_rec_inspector.html
 """
 
 from __future__ import annotations
@@ -54,7 +57,6 @@ import argparse
 import csv
 import itertools
 import json
-from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -92,8 +94,8 @@ MEMBER_STYLE = [
 ]
 
 ALGORITHMS = [
-    {"key": "wAVG", "name": "Weighted average", "family": "AGG", "mode": "order",
-     "desc": "Member-importance-weighted mean of members' real EASE scores, ranked by grouprec's GroupRecommender + WeightedAverageAggregator. The influence weight tilts the mean."},
+    {"key": "wAVG", "name": "Weighted average", "family": "AGG", "mode": "score",
+     "desc": "Member-importance-weighted mean of members' real EASE scores via grouprec's GroupRecommender.group_scores + WeightedAverageAggregator; the 0–1 value is the group relevance. The influence weight tilts the mean."},
     {"key": "EPFuzzDA", "name": "EP-FuzzDA", "family": "AGG", "mode": "order",
      "desc": "Fairness aggregator (grouprec EPFuzzDAAggregator): greedily picks items to meet each member's target share. The influence weight sets each member's target importance."},
     {"key": "GroupIM", "name": "GroupIM", "family": "E2E", "mode": "score",
@@ -196,22 +198,37 @@ def fit_topk_sae(item_emb, *, hidden=SAE_HIDDEN, k=SAE_K, steps=SAE_STEPS, seed=
 # Real framework calls over the per-member influence grid
 # --------------------------------------------------------------------------- #
 def build_groupim_grid(model, members, cand):
-    """GroupIM scores over the weight grid via the public framework API
-    ``GroupIM.group_scores(members, cand, member_weights=w)`` -- a real forward pass."""
+    """GroupIM scores + per-combo pooling attention over the weight grid via
+    ``GroupIM.group_scores(members, cand, member_weights=w, return_attention=True)``.
+    Collecting attention per combo (not just at uniform weights) lets the UI derive
+    attribution that is consistent with which grid point's items are being shown."""
+    grid, att_grid, M = {}, {}, len(members)
+    for combo in itertools.product(range(len(GRID_LEVELS)), repeat=M):
+        key = "".join(str(c) for c in combo)
+        w = list(_norm_combo([GRID_LEVELS[c] for c in combo]))
+        s, att = model.group_scores(members, cand, member_weights=w, return_attention=True)
+        grid[key] = [round(float(x), 4) for x in _minmax(np.asarray(s, dtype=float))]
+        att_grid[key] = [round(float(x), 4) for x in att]
+    return grid, att_grid
+
+
+def build_agg_score_grid(rec, members, cand, agg_factory):
+    """Per-item group scores from the real ``GroupRecommender.group_scores`` over the weight
+    grid (for score-reduction aggregators like wAVG, which expose ``score_items``). Returns
+    combo -> [minmax 0-1 scores], so the UI can show an actual group rating, not just a rank."""
     grid, M = {}, len(members)
     for combo in itertools.product(range(len(GRID_LEVELS)), repeat=M):
-        w = list(_norm_combo([GRID_LEVELS[c] for c in combo]))
-        s = np.asarray(model.group_scores(members, cand, member_weights=w), dtype=float)
+        w = _norm_combo([GRID_LEVELS[c] for c in combo])
+        rec.aggregator = agg_factory(w)
+        s = np.asarray(rec.group_scores(members, items=cand), dtype=float)
         grid["".join(str(c) for c in combo)] = [round(float(x), 4) for x in _minmax(s)]
-    # native (equal-weight) per-member pooling weights, for the contribution dots
-    _, att = model.group_scores(members, cand, member_weights=[1.0] * M, return_attention=True)
-    att = np.repeat(np.asarray(att)[:, None], len(cand), axis=1)          # broadcast over items
-    return grid, att
+    return grid
 
 
 def build_agg_order_grid(rec, members, cand, agg_factory):
-    """Candidate ordering from the real ``GroupRecommender`` pipeline over the weight grid.
-    ``rec`` carries a pre-fitted base; we only swap in the weighted aggregator per combo."""
+    """Candidate ordering from the real ``GroupRecommender`` pipeline over the weight grid
+    (for selection-based aggregators like EP-FuzzDA, which return an ordering, not scores).
+    ``rec`` carries a pre-fitted base; we only swap in the aggregator per combo."""
     pos = {c: i for i, c in enumerate(cand)}
     grid, M = {}, len(members)
     for combo in itertools.product(range(len(GRID_LEVELS)), repeat=M):
@@ -231,17 +248,10 @@ def build(out: Path) -> None:
     ui, ii = data.user_index, data.item_index
     items_arr = data.items
     inter = data.interactions
-    liked = {int(u): set(sub.loc[sub["rating"] >= LIKE, "item"].astype(int)) for u, sub in inter.groupby("user")}
     # SUBSET RULE (history): top-N_HISTORY items by rating, ties broken by ascending item id (deterministic).
     rated_top = {int(u): sub.sort_values(["rating", "item"], ascending=[False, True])["item"].astype(int).tolist()
                  for u, sub in inter.groupby("user")}
     R = data.user_item_matrix(value="rating")
-
-    def consensus_items(mset):
-        cnt = Counter()
-        for m in mset:
-            cnt.update(liked.get(m, ()))
-        return [it for it, c in cnt.items() if c >= CONSENSUS]
 
     def cohesion(mset):
         rows = np.array([R[ui[m]] for m in mset], dtype=float)
@@ -252,18 +262,26 @@ def build(out: Path) -> None:
 
     # ---- groups via the framework's synthetic sampler, one regime at a time ---- #
     print("[groups] generating via gr.groups.synthetic (similar / divergent / outlier) ...", flush=True)
-    chosen, group_items, group_kinds = [], [], []
+    chosen, group_kinds, group_interactions = [], [], {}
     for kind, n_want in GROUP_PLAN:
-        kept, seen = 0, set()
         cand_groups = gr.groups.synthetic(data, kind=kind, size=GROUP_SIZE, n=max(60, n_want * 20), seed=0)
+        # dedup candidate member-sets, preserving generation order
+        uniq, seen = [], set()
         for members in cand_groups:
             key = tuple(sorted(int(x) for x in members))
-            if key in seen:
-                continue
-            seen.add(key)
-            cons = consensus_items(key)
+            if key not in seen:
+                seen.add(key); uniq.append(np.array(key, dtype=np.int64))
+        # derive each candidate's consensus items through the FRAMEWORK: an item is a group
+        # interaction if >= CONSENSUS members liked it (like = rating >= LIKE). Same call a user makes.
+        cand_ints = gr.groups.derive_group_interactions(
+            data, gr.Groups(uniq, metadata={"kind": kind}),
+            like_threshold=LIKE, min_members=CONSENSUS)
+        kept = 0
+        for i, members in enumerate(uniq):
+            cons = cand_ints[i]
             if len(cons) >= MIN_CONSENSUS_ITEMS:
-                chosen.append(list(key)); group_items.append(cons); group_kinds.append(kind)
+                group_interactions[len(chosen)] = cons
+                chosen.append([int(x) for x in members]); group_kinds.append(kind)
                 kept += 1
             if kept >= n_want:
                 break
@@ -272,7 +290,6 @@ def build(out: Path) -> None:
 
     groups = gr.Groups([np.array(m, dtype=np.int64) for m in chosen],
                        metadata={"kind": "synthetic", "source": DATASET})
-    group_interactions = {g: group_items[g] for g in range(len(chosen))}
 
     # ---- fit recommenders (framework) ---- #
     print("[fit] EASE ...", flush=True)
@@ -304,7 +321,7 @@ def build(out: Path) -> None:
     rng = np.random.default_rng(0)
     groups_out = []
     for gslot, mset in enumerate(chosen):
-        cons = group_items[gslot]
+        cons = group_interactions[gslot]
         pos = int(cons[0])
         # SUBSET RULE (candidates): pos consensus item + uniformly-sampled negatives that no member rated (seed gslot).
         member_rated = set()
@@ -324,11 +341,11 @@ def build(out: Path) -> None:
         # rankings: real framework calls (GroupRecommender pipeline for the aggregators,
         # GroupIM.group_scores for the deep model) over the 125-point member-weight grid.
         order_grid = {
-            "wAVG": build_agg_order_grid(rec, mset, cand, lambda w: WeightedAverageAggregator(member_weights=w)),
             "EPFuzzDA": build_agg_order_grid(rec, mset, cand, lambda w: EPFuzzDAAggregator(member_weights=w)),
         }
-        gim_grid, gim_att = build_groupim_grid(groupim, mset, cand)
-        score_grid = {"GroupIM": gim_grid}
+        wavg_grid = build_agg_score_grid(rec, mset, cand, lambda w: WeightedAverageAggregator(member_weights=w))
+        gim_grid, gim_att_grid = build_groupim_grid(groupim, mset, cand)
+        score_grid = {"wAVG": wavg_grid, "GroupIM": gim_grid}
 
         members_out = []
         for mi, m in enumerate(mset):
@@ -349,9 +366,9 @@ def build(out: Path) -> None:
             "kind": kind, "cohesion": round(cohesions[gslot], 2),
             "members": members_out, "candidates": cand, "pos": pos,
             "agg": [r.round(4).tolist() for r in rm],            # per-member scores (attribution)
-            "scoreGrid": score_grid,                              # wAVG + GroupIM: combo -> [C scores]
-            "orderGrid": order_grid,                              # EPFuzzDA: combo -> [ordering]
-            "att": {"GroupIM": [[round(float(x), 4) for x in row] for row in gim_att]},
+            "scoreGrid": score_grid,                              # GroupIM: combo -> [C scores]
+            "orderGrid": order_grid,                              # wAVG + EPFuzzDA: combo -> [ordering]
+            "attGrid": {"GroupIM": gim_att_grid},                 # GroupIM: combo -> [M att weights]
         })
         print(f"  [group {gslot + 1}/{len(chosen)}] {kind} users={mset} coh={cohesions[gslot]:.2f} consensus={len(cons)}")
 
@@ -380,7 +397,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Group Recommendation Explorer — MovieLens (latest-small)</title>
+<title>Group Recommendation Inspector — MovieLens (latest-small)</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root{--bg:#f8f7f3;--surface:#fff;--surface1:#f1efe8;--border:rgba(0,0,0,.12);
@@ -451,15 +468,15 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </style>
 </head>
 <body>
-<h1>Group recommendation explorer</h1>
+<h1>Group recommendation inspector</h1>
 <p class="subtitle">Real MovieLens (latest-small) · groups from <code>gr.groups.synthetic</code> (similar / divergent / outlier) with consensus-derived interactions · the slider is each member's <b>importance weight</b> (normalised to sum to 100%)</p>
 
 <div class="viewtabs">
-  <button class="tab-btn active" id="vt-explorer" onclick="setView('explorer')">Explorer</button>
+  <button class="tab-btn active" id="vt-inspector" onclick="setView('inspector')">Inspector</button>
   <button class="tab-btn" id="vt-about" onclick="setView('about')">How it's built</button>
 </div>
 
-<div id="view-explorer">
+<div id="view-inspector">
 <div class="controls">
   <select id="algo-select" onchange="onAlgo()"></select>
   <span id="algo-badge" class="badge"></span>
@@ -487,16 +504,16 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="legend" id="legend"></div>
   </div>
   <div>
-    <p class="section-label">Group recommendations (top 5 of <span id="cand-n"></span> candidates)</p>
+    <p class="section-label">Group recommendations (top 5 of <span id="cand-n"></span> candidates) · <span id="score-label" style="text-transform:none;color:var(--text-sec)"></span></p>
     <div class="recs-card" id="recs-container"></div>
-    <p class="attr-note">Number = the item's group score (0–1) for score-based methods, or its rank for the selection-based fair aggregator · dots = each user's share of that item's relevance (hover for %) · <span style="color:var(--pos)">amber ✓</span> = a consensus item the group liked</p>
+    <p class="attr-note"><span id="score-legend"></span> · dots = each user's share of that item's relevance (hover for %) · <span style="color:var(--pos)">amber ✓</span> = the group's consensus item (rated ≥4 by ≥2 members)</p>
     <div class="chart-wrap">
       <p class="section-label">Aggregate user contribution across the top 5</p>
       <div style="position:relative;height:90px"><canvas id="contrib-chart"></canvas></div>
     </div>
   </div>
 </div>
-</div><!-- /view-explorer -->
+</div><!-- /view-inspector -->
 
 <div id="view-about" class="about" style="display:none">
   <p>This page is a <b>case study</b> for the <b>grouprec</b> toolkit: a group recommendation pipeline
@@ -505,11 +522,12 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   (no server, no API calls at view time).</p>
 
   <h3>1 · The real framework calls</h3>
-  <p>Every <em>ranking</em> you see is produced by a genuine <code>grouprec</code> call — the
+  <p>Every <em>ranking</em> you see is produced by a real <code>grouprec</code> call — the
   aggregators through <code>GroupRecommender</code>, the deep model through
   <code>GroupIM.group_scores</code> (both steered by the per-member weights):</p>
   <pre>data   = gr.datasets.load("ml-latest-small")
 groups = gr.groups.synthetic(data, kind="divergent", size=3, n=3)
+gints  = gr.groups.derive_group_interactions(data, groups)   # per-group signal (majority, overridable)
 ease   = EASE(reg=200.0).fit(data)
 
 # results-aggregation (utilitarian / fairness), steered by member weights:
@@ -517,14 +535,14 @@ rec = GroupRecommender(ease, EPFuzzDAAggregator(member_weights=w)); rec.dataset_
 rec.recommend(members, k=5, candidates=cands)
 
 # profile-aggregation deep model, steered by member weights:
-gim = GroupIM(groups, group_interactions).fit(data)
+gim = GroupIM(groups, gints).fit(data)
 gim.group_scores(members, cands, member_weights=w)</pre>
-  <p><b>This is the essence, not the whole script.</b> The full generator
-  (<code>scripts/build_explorer.py</code>, ~400 lines) wraps those calls with: parsing MovieLens
-  <code>movies.csv</code> for titles/genres; deriving each group's consensus items; candidate
-  sampling; a Top-K sparse autoencoder for the latent concepts (adapted from an external repo —
-  <em>not</em> part of grouprec); and baking a 125-point member-weight grid into JSON. So the
-  framework does the recommendation; the script does data prep, the SAE explanation, and packaging.</p>
+  <p><b>This is the core part, not the whole script.</b> The full generator
+  (<code>scripts/build_inspector.py</code>, ~400 lines) wraps those calls with: parsing MovieLens
+  <code>movies.csv</code> for titles/genres; candidate sampling; a Top-K sparse autoencoder for the
+  latent concepts (adapted from an external repo — <em>not</em> part of grouprec); and baking a
+  125-point member-weight grid into JSON. So the framework does the recommendation <em>and</em> the
+  group-interaction derivation; the script does data prep, the SAE explanation, and packaging.</p>
 
   <h3>2 · How the data is shipped (offline → one file)</h3>
   <ol>
@@ -540,11 +558,14 @@ gim.group_scores(members, cands, member_weights=w)</pre>
         a slider just looks up the nearest precomputed grid point.</li>
   </ol>
 
-  <h3>3 · Groups (generated, not hand-picked)</h3>
+  <h3>3 · Synthetic groups</h3>
+  <p>Movielens latest small was chosen due to high familiarity of the items, however, no groups were available in the dataset => synthetic groups were generated.</p>
   <p>Membership comes from <code>gr.groups.synthetic</code> in three regimes — <b>similar</b>,
   <b>divergent</b>, <b>outlier</b> (three each), badged with the measured mean pairwise rating
-  correlation. A group's interactions are <b>derived, not simulated</b>: the <b>consensus items</b>
-  (rated ≥4 by ≥2 of 3 members) — a deterministic function of the real ratings.</p>
+  correlation. A group's interactions are <b>derived, not simulated</b>, by the framework call
+  <code>gr.groups.derive_group_interactions</code>: by default an item is a group's
+  <b>consensus item</b> if rated ≥4 by ≥2 of the 3 members — a deterministic function of the real
+  ratings — and the rule is overridable with a predicate (e.g. unanimity, or "any member").</p>
 
   <h3>4 · Algorithms &amp; faithful interactivity</h3>
   <p>The slider is each member's importance weight (normalised to 100%). Outputs are precomputed on a
@@ -560,8 +581,6 @@ gim.group_scores(members, cands, member_weights=w)</pre>
         (<code>α'<sub>m</sub> ∝ w<sub>m</sub>·α<sub>m</sub></code>), reducing to the native model at equal
         weights. Steering is in the model's pooling — <b>not</b> via the SAE.</li>
   </ul>
-  <p>Weight-agnostic rules (least-misery/most-pleasure/Borda) are excluded; so are LTP (≈EP-FuzzDA in
-  single-shot) and AGREE (its non-linear head steers weakly).</p>
 
   <h3>5 · Latent concepts (how the SAE was adopted)</h3>
   <p>We reuse a <b>Top-K sparse autoencoder</b> (standardised input, unit-norm decoder, ReLU encoder,
@@ -582,8 +601,8 @@ gim.group_scores(members, cands, member_weights=w)</pre>
     <tr><td>Latent concepts (3)</td><td>SAE features with highest mean activation over the member's items</td></tr>
     <tr><td>Concept exemplars (3)</td><td>items with highest activation for the feature</td></tr>
   </table>
-  <p style="margin-top:14px">Reproduce with <code>python scripts/build_explorer.py</code>. Full write-up:
-  <code>docs/EXPLORER.md</code> in the repository.</p>
+  <p style="margin-top:14px">Reproduce with <code>python scripts/build_inspector.py</code>. Full write-up:
+  <code>docs/INSPECTOR.md</code> in the repository.</p>
 </div>
 
 <div class="tip" id="tip"></div>
@@ -618,20 +637,31 @@ function onGroup(){ groupIdx = +document.getElementById('group-select').value; r
 function resetWeights(){ weights = group().members.map(()=>0.5); renderAll(); }
 function normWeights(){ const t = weights.reduce((a,b)=>a+b,0)||1; return weights.map(w=>w/t); }
 
+// Attribution uses the same snapped effective weights as the displayed items, so dots and
+// items are always consistent (both update at the same grid boundaries, not independently).
+function effectiveWeights(){
+  const ck=comboKey(), raw=Array.from(ck).map(c=>LEVELS[parseInt(c)]);
+  const s=raw.reduce((a,b)=>a+b,0);
+  return s===0 ? group().members.map(()=>1/group().members.length) : raw.map(w=>w/s);
+}
 function computeScores(){
-  const g = group(), M = g.members.length, C = g.candidates.length, wn = normWeights();
+  const g = group(), M = g.members.length, C = g.candidates.length, ew = effectiveWeights();
   let score = new Array(C).fill(0);
   let contrib = Array.from({length:M},()=>new Array(C).fill(0));
   const S = g.agg;                                  // M x C normalised per-member scores
   if(!isE2E()){
-    for(let m=0;m<M;m++) for(let c=0;c<C;c++) contrib[m][c]=wn[m]*S[m][c];   // relevance-share attribution
+    for(let m=0;m<M;m++) for(let c=0;c<C;c++) contrib[m][c]=ew[m]*S[m][c];
   }
-  if(SCOREK.indexOf(algoKey)>=0){                   // score-based (wAVG, GroupIM)
+  if(SCOREK.indexOf(algoKey)>=0){                   // score-based (GroupIM)
     const vec = g.scoreGrid[algoKey][comboKey()] || g.scoreGrid[algoKey][eqKey()];
     for(let c=0;c<C;c++) score[c]=vec[c];
-    if(isE2E()){ const att=g.att[algoKey];
-      for(let c=0;c<C;c++) for(let m=0;m<M;m++) contrib[m][c]=wn[m]*att[m][c]; }
-  } else {                                          // order-based (EP-FuzzDA)
+    if(isE2E()){
+      // attGrid stores per-combo pooling weights (accurate); fall back to ew*att if absent
+      const ck=comboKey(), ag=g.attGrid||{}, attW=(ag[algoKey]||{})[ck]||(ag[algoKey]||{})[eqKey()]||null;
+      if(attW){ for(let c=0;c<C;c++) for(let m=0;m<M;m++) contrib[m][c]=attW[m]; }
+      else if(g.att){ const att=g.att[algoKey]; for(let c=0;c<C;c++) for(let m=0;m<M;m++) contrib[m][c]=ew[m]*att[m][c]; }
+    }
+  } else {                                          // order-based (EP-FuzzDA, wAVG)
     const ord = g.orderGrid[algoKey][comboKey()] || g.orderGrid[algoKey][eqKey()];
     for(let r=0;r<ord.length;r++) score[ord[r]] = (ord.length - r);
   }
@@ -657,6 +687,12 @@ function renderControls(){
     ? "GroupIM (deep): the influence weight is injected into the model's own attention aggregator and precomputed on a grid — NOT SAE steering. Each step is a real forward pass; equal weights = the native model."
     : "Aggregation: the influence weight is each member's importance. Weighted-average = grouprec WeightedAverageAggregator; EP-FuzzDA is the real fairness aggregator run with these member weights. (Weight-agnostic rules like least-misery are excluded — they ignore weights.)";
   document.getElementById('cand-n').textContent=group().candidates.length;
+  // persistent (not hover-only) description of what each item's number means
+  const scoreLbl = isOrder()
+    ? 'number = selection rank (#1 = picked first)'
+    : 'number = group relevance score (0–1)';
+  document.getElementById('score-label').textContent = scoreLbl;
+  document.getElementById('score-legend').textContent = scoreLbl.charAt(0).toUpperCase() + scoreLbl.slice(1);
 }
 function updateWeightLabels(){ const wn=normWeights(); group().members.forEach((u,i)=>{const el=document.getElementById('wlab-'+i); if(el) el.textContent=Math.round(wn[i]*100)+'%';}); }
 function renderUsers(){
@@ -680,11 +716,17 @@ function renderRecs(){
         onmousemove="showTip(event,'${u.label}: '+Math.round(${sh}*100)+'%')" onmouseleave="hideTip()"></div>`;}).join('');
     const isPos=r.item===g.pos;
     const val = ord ? ('#'+(rank+1)) : r.score.toFixed(2);
+    const posTip='Consensus item — rated ≥4 by ≥2 of the 3 members; the historical signal used to build this group, not a model prediction';
+    const valTip = ord
+      ? `Selection rank #${rank+1} — EP-FuzzDA balances members by selecting items, so it ranks rather than assigning a 0–1 score`
+      : `Group relevance score: ${r.score.toFixed(3)} (higher = better, 0–1)`;
+    const posAttr = isPos ? ` onmousemove="showTip(event,'${posTip}')" onmouseleave="hideTip()" style="cursor:help"` : '';
+    const valAttr = ` onmousemove="showTip(event,'${valTip}')" onmouseleave="hideTip()" style="cursor:help"`;
     return `<div class="rec-item"><div class="rank-badge">${rank+1}</div>
-      <div class="rec-name"><div class="title">${title(r.item)}${isPos?' <span class="pos-tag">✓</span>':''}</div>
-        <div class="genre">${isPos?'consensus item':'candidate'}</div></div>
-      <span class="scoreval" title="${ord?'selection rank':'group score (0–1)'}">${val}</span>
-      <div class="bar-bg"><div class="bar-fill" style="width:${Math.round(r.bar*100)}%"></div></div>
+      <div class="rec-name"><div class="title">${title(r.item)}${isPos?` <span class="pos-tag"${posAttr}>✓</span>`:''}</div>
+        <div class="genre"${posAttr}>${isPos?'consensus item':'candidate'}</div></div>
+      <span class="scoreval"${valAttr}>${val}</span>
+      <div class="bar-bg"${valAttr}><div class="bar-fill" style="width:${Math.round(r.bar*100)}%"></div></div>
       <div class="dots">${dots}</div></div>`;
   }).join('');
 }
@@ -714,15 +756,13 @@ function renderAttr(){
     }).join('<br>');
     note.textContent='Each member\'s own top-3 candidates from the EASE base recommender, before any group merging.';
   } else {
-    if(isE2E()){
-      el.innerHTML=`<span style="color:var(--text-muted)">Latent concepts are an SAE over the recommender's item embeddings; they explain members, not the deep model's steering. Switch to an [AGG] algorithm to inspect them.</span>`;
-    } else {
-      el.innerHTML=g.members.map(u=>{
-        const f=u.sae.map(s=>`<b style="color:var(--agg)">${s.label}</b> <span class="mono">[${s.items.map(title).join(', ')}]</span>`).join('<br>&nbsp;&nbsp;');
-        return `<b>${u.label}:</b><br>&nbsp;&nbsp;${f}`;
-      }).join('<br>');
-      note.textContent='Concepts a member triggers (top-3 by activation over their history), from a Top-K SAE over item embeddings, labelled by the genre of each concept\'s top items. The films listed are the concept\'s exemplars, so they may differ from the member\'s own history.';
-    }
+    el.innerHTML=g.members.map(u=>{
+      const f=u.sae.map(s=>`<b style="color:var(--agg)">${s.label}</b> <span class="mono">[${s.items.map(title).join(', ')}]</span>`).join('<br>&nbsp;&nbsp;');
+      return `<b>${u.label}:</b><br>&nbsp;&nbsp;${f}`;
+    }).join('<br>');
+    note.textContent = isE2E()
+      ? 'Concepts a member triggers (top-3 by activation over their history), from a Top-K SAE over GroupIM\'s item embeddings. These explain member taste profiles — the SAE is not involved in the model\'s attention-based steering.'
+      : 'Concepts a member triggers (top-3 by activation over their history), from a Top-K SAE over item embeddings, labelled by the genre of each concept\'s top items. The films listed are the concept\'s exemplars, so they may differ from the member\'s own history.';
   }
 }
 function renderLegend(){
@@ -735,9 +775,9 @@ function showTip(e,t){ tip.textContent=t; tip.style.opacity=1; const w=tip.offse
 function hideTip(){ tip.style.opacity=0; }
 function renderAll(){ renderControls(); renderUsers(); renderRecs(); renderChart(); renderAttr(); renderLegend(); }
 function setView(v){
-  document.getElementById('view-explorer').style.display = v==='explorer' ? '' : 'none';
+  document.getElementById('view-inspector').style.display = v==='inspector' ? '' : 'none';
   document.getElementById('view-about').style.display = v==='about' ? '' : 'none';
-  document.getElementById('vt-explorer').classList.toggle('active', v==='explorer');
+  document.getElementById('vt-inspector').classList.toggle('active', v==='inspector');
   document.getElementById('vt-about').classList.toggle('active', v==='about');
 }
 initControls(); resetWeights();
@@ -749,7 +789,7 @@ initControls(); resetWeights();
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--out", default="docs/group_rec_explorer.html")
+    p.add_argument("--out", default="docs/group_rec_inspector.html")
     a = p.parse_args()
     build(Path(a.out))
 

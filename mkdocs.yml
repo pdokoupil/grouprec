@@ -13,7 +13,7 @@ nav:
   - Reproducibility: reproducibility.md
   - Extending (algorithm/dataset/metric/group kind): extending.md
   - Integration (LensKit / RecBole / implicit): integration.md
-  - Interactive explorer: EXPLORER.md
+  - Interactive inspector: INSPECTOR.md
   - Leaderboard: leaderboard.md
 markdown_extensions:
   - admonition
