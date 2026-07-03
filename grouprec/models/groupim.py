@@ -124,6 +124,7 @@ class GroupIM:
     """Mutual-information group recommender (``paradigm="profile"``)."""
 
     paradigm = "profile"
+    supports_member_weights = True   # group rep is attention-pooled from member encodings
 
     def __init__(self, groups: Groups, group_interactions, *, embedding_dim: int = 64,
                  layers: tuple = (64,), lambda_mi: float = 0.1, drop: float = 0.4,

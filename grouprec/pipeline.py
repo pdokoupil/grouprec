@@ -94,5 +94,30 @@ class GroupRecommender:
         idx = self.aggregator.aggregate(scores, k, exclude=ex_idx)
         return self.dataset_.items[idx]
 
+    # -- score introspection ----------------------------------------------- #
+    def member_scores(self, members, items=None) -> np.ndarray:
+        """Per-member item scores -- the base recommender's predictions, normalised as
+        configured. Shape ``(n_members, n_items or len(items))``, columns in
+        ``dataset.items`` order (or ``items`` order if given).
+
+        This is the *individual* view that the aggregator consumes; it is exactly the
+        base RS output (this is the sense in which "per-member estimate == base RS").
+        """
+        if self.dataset_ is None:
+            raise RuntimeError("GroupRecommender must be fit() before scoring.")
+        scores = np.asarray(self.base.score(members, items=items), dtype=float)
+        return normalize_mgains(scores, self.normalize) if self.normalize else scores
+
+    def group_scores(self, members, items=None) -> np.ndarray:
+        """Aggregated per-item *group* utility, shape ``(n_items or len(items),)``.
+
+        This is the score the group ranking sorts on -- **not** the per-member base RS
+        output (use :meth:`member_scores` for that). Defined only when the bound
+        aggregator is score-reduction-based (ADD/AVG/wAVG/LMS/MUL/MPL/AVGNM/BDC);
+        selection-based aggregators (EP-FuzzDA, GFAR, FAI, sequential) raise, since they
+        emit an ordering rather than item scores -- use :meth:`recommend` for those.
+        """
+        return self.aggregator.score_items(self.member_scores(members, items=items))
+
 
 __all__ = ["GroupRecommender"]

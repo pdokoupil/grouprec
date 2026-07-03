@@ -93,6 +93,26 @@ class Aggregator(ABC):
             Item indices that must never be selected (e.g. already-seen items).
         """
 
+    #: ``True`` for score-reduction aggregators that expose a static per-item group
+    #: utility via :meth:`score_items`; ``False`` for selection / greedy / sequential
+    #: aggregators whose output is only an ordering. Lets callers (and
+    #: :meth:`~grouprec.GroupRecommender.group_scores`) tell the two apart.
+    produces_item_scores: bool = False
+
+    def score_items(self, scores, *, exclude: Iterable[int] | None = None) -> np.ndarray:
+        """Per-item aggregated group utility, shape ``(n_items,)``.
+
+        Defined only for **score-reduction** aggregators (the per-item value the
+        ranking sorts on -- mean, weighted mean, min, ...). Selection-based
+        aggregators (FAI and the greedy/fairness/sequential families) build a list
+        incrementally and have no such static per-item score, so they leave this
+        raising; rank them with :meth:`aggregate` instead.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} ({self.name}) is selection-based and exposes no "
+            "per-item group score; use aggregate()/GroupRecommender.recommend() for an "
+            "ordering.")
+
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return f"{type(self).__name__}(name={self.name!r})"
 

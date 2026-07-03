@@ -45,23 +45,42 @@ class _Net(nn.Module):
         """User-item scores for aligned (B,) index tensors."""
         return self._score(self.user_emb(user_idx), self.item_emb(item_idx))
 
-    def group_rep(self, member_idx, item_vecs):
-        """Group representation per candidate item. member_idx: (M,), item_vecs: (N,d)."""
+    def group_rep(self, member_idx, item_vecs, member_weights=None):
+        """Group representation per candidate item. member_idx: (M,), item_vecs: (N,d).
+
+        ``member_weights`` (one non-negative weight per member, any scale) steers the
+        pooling: a weighted mean for NCF, or attention reweighted by ``a'_m ∝ w_m·a_m``
+        (renormalised) for AGREE. ``None``/uniform reproduces the native model. The
+        resulting per-member pooling weight (averaged over items for AGREE) is cached on
+        ``self._last_pool`` for attribution.
+        """
         memb = self.user_emb(member_idx)                      # (M, d)
-        if not self.attention:
-            return memb.mean(dim=0, keepdim=True).expand(item_vecs.size(0), -1)
         M, d = memb.shape
         N = item_vecs.size(0)
+        mw = None
+        if member_weights is not None:
+            mw = torch.as_tensor(member_weights, dtype=memb.dtype, device=memb.device)
+            if mw.numel() != M:
+                raise ValueError(
+                    f"member_weights has {mw.numel()} entries but group has {M} members.")
+        if not self.attention:
+            w = memb.new_full((M,), 1.0 / M) if mw is None else mw / (mw.sum() + 1e-12)
+            self._last_pool = w.detach()
+            return (w[:, None] * memb).sum(dim=0, keepdim=True).expand(N, -1)
         mm = memb.unsqueeze(1).expand(M, N, d)               # (M, N, d)
         ii = item_vecs.unsqueeze(0).expand(M, N, d)
         a = self.att(torch.cat([mm, mm * ii], dim=-1)).squeeze(-1)  # (M, N)
         a = torch.softmax(a, dim=0)
+        if mw is not None:
+            a = a * mw[:, None]
+            a = a / (a.sum(dim=0, keepdim=True) + 1e-12)
+        self._last_pool = a.mean(dim=1).detach()             # (M,) mean pooling weight
         return (a.unsqueeze(-1) * mm).sum(dim=0)             # (N, d)
 
-    def group_item_scores(self, member_idx, item_idx):
+    def group_item_scores(self, member_idx, item_idx, member_weights=None):
         """Scores of ``item_idx`` (N,) for one group given member indices (M,)."""
         item_vecs = self.item_emb(item_idx)
-        g = self.group_rep(member_idx, item_vecs)
+        g = self.group_rep(member_idx, item_vecs, member_weights=member_weights)
         return self._score(g, item_vecs)
 
 
@@ -70,6 +89,7 @@ class GroupNNModel:
 
     paradigm = "profile"
     attention = False
+    supports_member_weights = True   # group rep is pooled from member embeddings
 
     def __init__(
         self,
@@ -159,34 +179,50 @@ class GroupNNModel:
                     loss = -torch.log(torch.sigmoid(ps - ns) + 1e-9).mean()
                     opt.zero_grad(); loss.backward(); opt.step()
 
-    # -- recommend ---------------------------------------------------------- #
-    def recommend(self, members, k: int, *, exclude=None, candidates=None) -> np.ndarray:
+    # -- score / recommend -------------------------------------------------- #
+    def group_scores(self, members, items=None, *, member_weights=None,
+                     return_attention=False):
+        """Per-item group scores for a member set (the model's forward pass).
+
+        ``items`` restricts scoring to those item ids (else all items, in
+        ``dataset.items`` order). ``member_weights`` steers the member pooling
+        (see :meth:`_Net.group_rep`); ``return_attention=True`` also returns the
+        per-member pooling weights ``(M,)`` as an interpretable attribution.
+        """
         if self.net_ is None:
-            raise RuntimeError(f"{type(self).__name__} must be fit() before recommending.")
+            raise RuntimeError(f"{type(self).__name__} must be fit() before scoring.")
         ui = self.dataset_.user_index
         midx = np.array([ui[u] for u in members if u in ui], dtype=np.int64)
         if midx.size == 0:
             midx = np.array([self.dataset_.n_users], dtype=np.int64)  # cold -> pad row
+            member_weights = None
+        elif member_weights is not None and len(member_weights) != midx.size:
+            raise ValueError(
+                f"member_weights has {len(member_weights)} entries but {midx.size} of the "
+                "given members are known to the model.")
+        if items is None:
+            item_idx = np.arange(self.dataset_.n_items, dtype=np.int64)
+        else:
+            item_idx = np.array([self.dataset_.item_index[i] for i in items], dtype=np.int64)
         self.net_.eval()
-
-        if candidates is not None:
-            cand = list(candidates)
-            cidx = np.array([self.dataset_.item_index[c] for c in cand], dtype=np.int64)
-            with torch.no_grad():
-                m = torch.as_tensor(midx, device=self.device)
-                scores = self.net_.group_item_scores(
-                    m, torch.as_tensor(cidx, device=self.device)).cpu().numpy()
-            order = np.argsort(-scores, kind="stable")[:k]
-            return np.asarray(cand)[order]
-
-        n_items = self.dataset_.n_items
         with torch.no_grad():
             m = torch.as_tensor(midx, device=self.device)
-            all_items = torch.arange(n_items, device=self.device)
-            scores = self.net_.group_item_scores(m, all_items).cpu().numpy()
+            it = torch.as_tensor(item_idx, device=self.device)
+            scores = self.net_.group_item_scores(
+                m, it, member_weights=member_weights).cpu().numpy()
+        if return_attention:
+            return scores, self.net_._last_pool.cpu().numpy()
+        return scores
+
+    def recommend(self, members, k: int, *, exclude=None, candidates=None,
+                  member_weights=None) -> np.ndarray:
+        if candidates is not None:
+            cand = list(candidates)
+            scores = self.group_scores(members, cand, member_weights=member_weights)
+            return np.asarray(cand)[np.argsort(-scores, kind="stable")[:k]]
+        scores = self.group_scores(members, member_weights=member_weights)
         if exclude:
             ex = [self.dataset_.item_index[i] for i in exclude if i in self.dataset_.item_index]
             scores[ex] = -np.inf
         budget = int(min(k, np.isfinite(scores).sum()))
-        top = np.argsort(-scores, kind="stable")[:budget]
-        return self.dataset_.items[top]
+        return self.dataset_.items[np.argsort(-scores, kind="stable")[:budget]]

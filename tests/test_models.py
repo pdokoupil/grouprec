@@ -164,6 +164,93 @@ def test_aligngroup_learns_above_random():
     assert rep.to_dict()[("coupled", "hr", 10, "group")] > 10 / gd.dataset.n_items
 
 
+@pytest.mark.parametrize("Model", [NCFGroup, AGREE, ConsRec, HyperGroup, AlignGroup])
+def test_group_scores_uniform_interface(Model):
+    """Every deep model exposes group_scores(members, items=None) with consistent shape,
+    and ranking via group_scores matches recommend()."""
+    gd = data_fixture()
+    m = Model(gd.groups, gd.group_interactions, epochs=2, seed=0).fit(gd.dataset)
+    members = gd.groups[0]
+    full = m.group_scores(members)
+    assert full.shape == (gd.dataset.n_items,)
+    cands = [int(x) for x in gd.dataset.items[:15]]
+    sub = m.group_scores(members, cands)
+    assert sub.shape == (len(cands),)
+    # candidate ranking by group_scores == recommend(candidates=...)
+    by_scores = np.asarray(cands)[np.argsort(-sub, kind="stable")[:5]]
+    np.testing.assert_array_equal(by_scores, m.recommend(members, k=5, candidates=cands))
+
+
+@pytest.mark.parametrize("Model,supported", [
+    (NCFGroup, True), (AGREE, True), (GroupIM, True),
+    (ConsRec, False), (HyperGroup, False), (AlignGroup, False),
+])
+def test_supports_member_weights_flag(Model, supported):
+    assert Model.supports_member_weights is supported
+
+
+@pytest.mark.parametrize("Model", [NCFGroup, AGREE])
+def test_member_weights_steer_pooling(Model):
+    """For member-pooling models, boosting one member raises its pooling weight and
+    moves the scores; uniform weights reproduce the native model."""
+    gd = data_fixture()
+    m = Model(gd.groups, gd.group_interactions, factors=16, epochs=3, seed=0).fit(gd.dataset)
+    members = gd.groups[0]
+    cands = [int(x) for x in gd.dataset.items[:20]]
+    base = m.group_scores(members, cands)
+    uniform = m.group_scores(members, cands, member_weights=[1.0] * len(members))
+    np.testing.assert_allclose(base, uniform, atol=1e-5)   # uniform == native
+    _, att_u = m.group_scores(members, cands, member_weights=[1.0] * len(members),
+                              return_attention=True)
+    heavy = [5.0] + [1.0] * (len(members) - 1)
+    steered, att_h = m.group_scores(members, cands, member_weights=heavy, return_attention=True)
+    assert att_h.shape == (len(members),) and abs(float(att_h.sum()) - 1.0) < 1e-4
+    assert att_h[0] > att_u[0]                              # member 0 pulled up
+    assert not np.allclose(steered, base)                  # steering changes the scores
+
+
+@pytest.mark.parametrize("Model", [ConsRec, HyperGroup, AlignGroup])
+def test_transductive_models_reject_member_weights(Model):
+    gd = data_fixture()
+    m = Model(gd.groups, gd.group_interactions, epochs=2, seed=0).fit(gd.dataset)
+    members = gd.groups[0]
+    with pytest.raises(NotImplementedError):
+        m.group_scores(members, member_weights=[1.0, 1.0, 1.0, 1.0])
+    with pytest.raises(NotImplementedError):
+        m.group_scores(members, return_attention=True)
+    with pytest.raises(NotImplementedError):
+        m.recommend(members, k=5, member_weights=[1.0, 1.0, 1.0, 1.0])
+
+
+def test_group_recommender_member_and_group_scores():
+    """GroupRecommender.member_scores == base RS output; group_scores == aggregated
+    per-item utility for score-based aggregators; selection-based ones raise."""
+    from grouprec.aggregators import WeightedAverageAggregator, EPFuzzDAAggregator
+    from grouprec.backends import EASE
+    gd = data_fixture()
+    cands = [int(x) for x in gd.dataset.items[:20]]
+    members = gd.groups[0]
+
+    rec = GroupRecommender(EASE(reg=50.0),
+                           WeightedAverageAggregator(member_weights=[0.6, 0.3, 0.1, 0.0]),
+                           normalize="minmax").fit(gd.dataset)
+    ms = rec.member_scores(members, items=cands)
+    assert ms.shape == (len(members), len(cands))
+    gs = rec.group_scores(members, items=cands)
+    assert gs.shape == (len(cands),)
+    # group_scores is the weighted mean of member_scores (the ranking criterion)
+    w = np.array([0.6, 0.3, 0.1, 0.0]); w = w / w.sum()
+    np.testing.assert_allclose(gs, (w[:, None] * ms).sum(0), atol=1e-6)
+    # ranking by group_scores == recommend
+    by_scores = np.asarray(cands)[np.argsort(-gs, kind="stable")[:5]]
+    np.testing.assert_array_equal(by_scores, rec.recommend(members, k=5, candidates=cands))
+
+    # selection-based aggregator: no per-item group score
+    rec2 = GroupRecommender(EASE(reg=50.0), EPFuzzDAAggregator(), normalize="minmax").fit(gd.dataset)
+    with pytest.raises(NotImplementedError):
+        rec2.group_scores(members, items=cands)
+
+
 def test_bridge_deep_and_aggregator_one_leaderboard():
     gd = data_fixture()
     task = BenchmarkTask(name="bridge", data=gd.dataset, groups=gd.groups,

@@ -219,3 +219,40 @@ def test_avg_least_misery_disagree_on_outlier():
 
 def test_paradigm_attribute():
     assert AverageAggregator().paradigm == "results"
+
+
+def test_score_items_matches_ranking_for_reductions():
+    rng = np.random.default_rng(1)
+    rm = rng.random((3, 25))
+    cases = {
+        AdditiveAggregator(): rm.sum(0),
+        AverageAggregator(): rm.mean(0),
+        WeightedAverageAggregator(member_weights=[0.6, 0.3, 0.1]): (
+            np.array([0.6, 0.3, 0.1])[:, None] * rm).sum(0),
+        LeastMiseryAggregator(): rm.min(0),
+        MultiplicativeAggregator(): rm.prod(0),
+        MostPleasureAggregator(): rm.max(0),
+    }
+    for agg, expected in cases.items():
+        util = agg.score_items(rm)
+        assert agg.produces_item_scores is True
+        assert util.shape == (25,)
+        np.testing.assert_allclose(util, expected)
+        # the ranking the pipeline sorts on is exactly score_items (descending, stable)
+        np.testing.assert_array_equal(
+            agg.aggregate(rm, 25), np.argsort(-util, kind="stable"))
+
+
+def test_score_items_honors_exclude():
+    rm = np.random.default_rng(2).random((2, 10))
+    util = AverageAggregator().score_items(rm, exclude=[3, 7])
+    assert util[3] == -np.inf and util[7] == -np.inf
+    assert np.isfinite(util[[0, 1, 2, 4, 5, 6, 8, 9]]).all()
+
+
+def test_selection_based_aggregators_have_no_item_scores():
+    rm = np.random.default_rng(3).random((3, 12))
+    for agg in [FAIAggregator(), get("EPFuzzDA"), get("GFAR")]:
+        assert agg.produces_item_scores is False
+        with pytest.raises(NotImplementedError):
+            agg.score_items(rm)

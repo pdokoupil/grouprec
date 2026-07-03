@@ -18,6 +18,20 @@ from ..groups import synthetic
 from ..split import Split
 
 
+def _reject_member_options(model, member_weights, return_attention) -> None:
+    """Guard for transductive models (``supports_member_weights = False``): per-member
+    weighting / pooling attribution are not defined for group-id graph embeddings."""
+    name = type(model).__name__
+    if member_weights is not None:
+        raise NotImplementedError(
+            f"{name} is transductive (the group is a learned graph node, not a pool of "
+            "member embeddings), so per-member `member_weights` are not defined. Use a "
+            "member-pooling model (GroupIM, AGREE, NCFGroup) for steerable inference.")
+    if return_attention:
+        raise NotImplementedError(
+            f"{name} has no per-member pooling weights to return as attention.")
+
+
 def normalize_group_interactions(group_interactions, n_groups: int) -> dict[int, list]:
     """Coerce dict / DataFrame(group, item) -> {group_index: [item ids]}."""
     if isinstance(group_interactions, pd.DataFrame):
@@ -73,4 +87,5 @@ def make_synthetic_group_data(
     return GroupTrainData(data, groups, group_interactions, group_truth, split)
 
 
-__all__ = ["GroupTrainData", "make_synthetic_group_data", "normalize_group_interactions"]
+__all__ = ["GroupTrainData", "make_synthetic_group_data", "normalize_group_interactions",
+           "_reject_member_options"]

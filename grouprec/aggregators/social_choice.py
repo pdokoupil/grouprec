@@ -16,29 +16,49 @@ from scipy.stats import rankdata
 from .base import Aggregator, as_score_matrix, available_mask, top_k_indices
 
 
-class AdditiveAggregator(Aggregator):
+def _mask_excluded(util: np.ndarray, exclude) -> np.ndarray:
+    """Return ``util`` with excluded item positions set to ``-inf`` (never selected)."""
+    if exclude is None:
+        return util
+    return np.where(available_mask(util.shape[0], exclude), util, -np.inf)
+
+
+class _ReductionAggregator(Aggregator):
+    """Shared machinery for score-reduction aggregators: a per-item utility (``_reduce``)
+    that both the ranking (:meth:`aggregate`) and the public :meth:`score_items` use."""
+
+    produces_item_scores = True
+
+    def _reduce(self, rm: np.ndarray) -> np.ndarray:
+        raise NotImplementedError
+
+    def score_items(self, scores, *, exclude=None):
+        return _mask_excluded(self._reduce(as_score_matrix(scores)), exclude)
+
+    def aggregate(self, scores, k, *, exclude=None):
+        rm = as_score_matrix(scores)
+        return top_k_indices(self._reduce(rm), k, available_mask(rm.shape[1], exclude))
+
+
+class AdditiveAggregator(_ReductionAggregator):
     """ADD -- sum of member scores."""
 
     name = "ADD"
 
-    def aggregate(self, scores, k, *, exclude=None):
-        rm = as_score_matrix(scores)
-        avail = available_mask(rm.shape[1], exclude)
-        return top_k_indices(rm.sum(axis=0), k, avail)
+    def _reduce(self, rm):
+        return rm.sum(axis=0)
 
 
-class AverageAggregator(Aggregator):
+class AverageAggregator(_ReductionAggregator):
     """AVG -- mean of member scores."""
 
     name = "AVG"
 
-    def aggregate(self, scores, k, *, exclude=None):
-        rm = as_score_matrix(scores)
-        avail = available_mask(rm.shape[1], exclude)
-        return top_k_indices(rm.mean(axis=0), k, avail)
+    def _reduce(self, rm):
+        return rm.mean(axis=0)
 
 
-class WeightedAverageAggregator(Aggregator):
+class WeightedAverageAggregator(_ReductionAggregator):
     """wAVG -- member-importance-weighted mean of member scores.
 
     ``member_weights`` are relative per-member importances (any non-negative scale);
@@ -51,61 +71,53 @@ class WeightedAverageAggregator(Aggregator):
     def __init__(self, member_weights=None) -> None:
         self._member_weights = None if member_weights is None else np.asarray(member_weights, dtype=float)
 
-    def aggregate(self, scores, k, *, exclude=None):
-        rm = as_score_matrix(scores)
-        m = rm.shape[0]
+    def _weights(self, m: int) -> np.ndarray:
         if self._member_weights is None:
-            w = np.full(m, 1.0 / m)
-        else:
-            w = self._member_weights
-            if w.size != m:
-                raise ValueError(f"member_weights has {w.size} entries but group has {m} members.")
-            s = w.sum()
-            w = np.full(m, 1.0 / m) if s <= 0 else w / s
-        avail = available_mask(rm.shape[1], exclude)
-        return top_k_indices((w[:, None] * rm).sum(axis=0), k, avail)
+            return np.full(m, 1.0 / m)
+        w = self._member_weights
+        if w.size != m:
+            raise ValueError(f"member_weights has {w.size} entries but group has {m} members.")
+        s = w.sum()
+        return np.full(m, 1.0 / m) if s <= 0 else w / s
+
+    def _reduce(self, rm):
+        return (self._weights(rm.shape[0])[:, None] * rm).sum(axis=0)
 
 
-class LeastMiseryAggregator(Aggregator):
+class LeastMiseryAggregator(_ReductionAggregator):
     """LMS -- minimum (least misery) of member scores."""
 
     name = "LMS"
 
-    def aggregate(self, scores, k, *, exclude=None):
-        rm = as_score_matrix(scores)
-        avail = available_mask(rm.shape[1], exclude)
-        return top_k_indices(rm.min(axis=0), k, avail)
+    def _reduce(self, rm):
+        return rm.min(axis=0)
 
 
-class MultiplicativeAggregator(Aggregator):
+class MultiplicativeAggregator(_ReductionAggregator):
     """MUL -- product of member scores."""
 
     name = "MUL"
 
-    def aggregate(self, scores, k, *, exclude=None):
-        rm = as_score_matrix(scores)
-        avail = available_mask(rm.shape[1], exclude)
-        return top_k_indices(rm.prod(axis=0), k, avail)
+    def _reduce(self, rm):
+        return rm.prod(axis=0)
 
 
-class MostPleasureAggregator(Aggregator):
+class MostPleasureAggregator(_ReductionAggregator):
     """MPL -- maximum (most pleasure) of member scores."""
 
     name = "MPL"
 
-    def aggregate(self, scores, k, *, exclude=None):
-        rm = as_score_matrix(scores)
-        avail = available_mask(rm.shape[1], exclude)
-        return top_k_indices(rm.max(axis=0), k, avail)
+    def _reduce(self, rm):
+        return rm.max(axis=0)
 
 
-class AVGNoMiseryAggregator(Aggregator):
+class AVGNoMiseryAggregator(_ReductionAggregator):
     """AVGNM -- average, restricted to items whose worst member score exceeds a
     misery threshold.
 
-    Items where ``min_member_score <= threshold`` are dropped; the rest are ranked
-    by mean score. Matches ``avgnm_algorithm`` (strict ``> threshold``). The
-    reference hard-codes ``threshold=1`` for graded ML ratings; here it is a
+    Items where ``min_member_score <= threshold`` are dropped (utility ``-inf``); the
+    rest are ranked by mean score. Matches ``avgnm_algorithm`` (strict ``> threshold``).
+    The reference hard-codes ``threshold=1`` for graded ML ratings; here it is a
     parameter (default ``0.0``).
     """
 
@@ -114,16 +126,18 @@ class AVGNoMiseryAggregator(Aggregator):
     def __init__(self, threshold: float = 0.0) -> None:
         self.threshold = float(threshold)
 
+    def _reduce(self, rm):
+        return np.where(rm.min(axis=0) > self.threshold, rm.mean(axis=0), -np.inf)
+
     def aggregate(self, scores, k, *, exclude=None):
         rm = as_score_matrix(scores)
-        avail = available_mask(rm.shape[1], exclude)
-        allowed = (rm.min(axis=0) > self.threshold) & avail
+        allowed = (rm.min(axis=0) > self.threshold) & available_mask(rm.shape[1], exclude)
         if not allowed.any():
             return np.empty(0, dtype=np.int64)
         return top_k_indices(rm.mean(axis=0), k, allowed)
 
 
-class BordaCountAggregator(Aggregator):
+class BordaCountAggregator(_ReductionAggregator):
     """BDC -- Borda count.
 
     Each member ranks the items; per-member ranks (``scipy`` ``method="min"``, so
@@ -133,12 +147,9 @@ class BordaCountAggregator(Aggregator):
 
     name = "BDC"
 
-    def aggregate(self, scores, k, *, exclude=None):
-        rm = as_score_matrix(scores)
-        avail = available_mask(rm.shape[1], exclude)
+    def _reduce(self, rm):
         # rankdata per member (row); method="min" matches the reference.
-        borda = np.vstack([rankdata(row, method="min") for row in rm])
-        return top_k_indices(borda.sum(axis=0), k, avail)
+        return np.vstack([rankdata(row, method="min") for row in rm]).sum(axis=0)
 
 
 class FAIAggregator(Aggregator):

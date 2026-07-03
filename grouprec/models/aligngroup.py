@@ -17,7 +17,7 @@ import torch.nn.functional as F
 
 from ..data import Dataset, Groups
 from .consrec import _PredictLayer, _build_hypergraph, _build_overlap
-from .data import normalize_group_interactions
+from .data import _reject_member_options, normalize_group_interactions
 
 
 class _AlignNet(nn.Module):
@@ -74,6 +74,7 @@ class AlignGroup:
     """Alignment-based group recommender (``paradigm="profile"``, transductive)."""
 
     paradigm = "profile"
+    supports_member_weights = False   # transductive (group-id node); no member pooling to steer
 
     def __init__(self, groups: Groups, group_interactions, *, emb_dim: int = 32,
                  layers: int = 4, epochs: int = 100, lr: float = 0.001,
@@ -162,12 +163,15 @@ class AlignGroup:
                 loss = F.softplus(net.user_pair(ut, nt) - net.user_pair(ut, pt)).mean()
                 opt.zero_grad(); loss.backward(); opt.step()
 
-    def recommend(self, members, k: int, *, exclude=None, candidates=None) -> np.ndarray:
+    def group_scores(self, members, items=None, *, member_weights=None,
+                     return_attention=False) -> np.ndarray:
+        """Per-item group scores (trained head over the fused group embedding).
+        AlignGroup is transductive, so ``member_weights`` / ``return_attention`` raise."""
+        _reject_member_options(self, member_weights, return_attention)
         if self.net_ is None:
-            raise RuntimeError("AlignGroup must be fit() before recommending.")
+            raise RuntimeError("AlignGroup must be fit() before scoring.")
         ui = self.dataset_.user_index
-        key = tuple(sorted(ui[u] for u in members if u in ui))
-        gi = self._lookup.get(key)
+        gi = self._lookup.get(tuple(sorted(ui[u] for u in members if u in ui)))
         self.net_.eval()
         with torch.no_grad():
             if self._fused_cache is None:       # embeddings are static after fit -> cache once
@@ -180,6 +184,13 @@ class AlignGroup:
             # dot product would ignore the learned nonlinear head and break the ranking
             g_mat = g_vec.unsqueeze(0).expand(i_emb.shape[0], -1)
             scores = self.net_._score(g_mat, i_emb).cpu().numpy()
+        if items is not None:
+            scores = scores[np.array([self.dataset_.item_index[i] for i in items], dtype=np.int64)]
+        return scores
+
+    def recommend(self, members, k: int, *, exclude=None, candidates=None,
+                  member_weights=None) -> np.ndarray:
+        scores = self.group_scores(members, member_weights=member_weights)
         if candidates is not None:
             cand = list(candidates)
             cidx = np.array([self.dataset_.item_index[c] for c in cand], dtype=np.int64)
