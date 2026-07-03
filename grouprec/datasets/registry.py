@@ -19,6 +19,7 @@ its own license (see the note in the docs / README): MIT covers our *code*, not 
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -45,6 +46,72 @@ class DatasetSpec:
 
 
 _REGISTRY: dict[str, DatasetSpec] = {}
+
+# --------------------------------------------------------------------------- #
+# session-wide license acceptance (the `accept_license=True` escape hatch, globally)
+# --------------------------------------------------------------------------- #
+_ACCEPT_ALL = False
+_ACCEPT_OUTPUT = sys.stderr   # where license texts are echoed when auto-accepting
+
+
+def accept_all(output=sys.stderr) -> None:
+    """Accept **all** dataset licenses for the rest of this session.
+
+    Bypasses the interactive y/N prompt that :func:`load` shows for license-gated
+    (``auto_nc``) datasets -- handy for scripts / unattended runs. License texts are
+    still echoed to ``output`` (a writable stream or a file path); pass
+    ``output=None`` to silence, or e.g. ``accept_all(output="/dev/null")``.
+
+    >>> import grouprec as gr
+    >>> gr.accept_all()                 # echo licenses to stderr, accept everything
+    >>> gr.accept_all(output=None)      # accept silently
+    """
+    global _ACCEPT_ALL, _ACCEPT_OUTPUT
+    _ACCEPT_ALL = True
+    _ACCEPT_OUTPUT = output
+
+
+def _echo(text: str) -> None:
+    """Write ``text`` to the configured accept-all sink (stream, path, or None)."""
+    out = _ACCEPT_OUTPUT
+    if out is None:
+        return
+    if isinstance(out, (str, Path)):
+        with open(out, "a", encoding="utf-8") as f:
+            f.write(text + "\n")
+    else:
+        print(text, file=out)
+
+
+def _interactive() -> bool:
+    """True when we can sensibly ask the user (a real TTY or an IPython/Jupyter
+    kernel). False for pytest / pipes / CI, where we must not block on input()."""
+    if sys.stdin is not None and sys.stdin.isatty():
+        return True
+    try:                                      # Jupyter: stdin isn't a tty but input() works
+        from IPython import get_ipython       # type: ignore
+        return get_ipython() is not None
+    except Exception:
+        return False
+
+
+def _confirm_license(name: str, spec: DatasetSpec, accept_license: bool) -> bool:
+    """Decide whether the caller has accepted ``spec``'s license."""
+    if accept_license or _ACCEPT_ALL:
+        return True
+    if _interactive():
+        prompt = (
+            f"\n[grouprec] Dataset '{name}' is license-gated:\n"
+            f"  License : {spec.license}\n"
+            f"  Homepage: {spec.homepage}\n"
+            f"  Cite    : {spec.citation}\n"
+            f"Download from the canonical host and accept these terms? [y/N] "
+        )
+        try:
+            return input(prompt).strip().lower() in ("y", "yes")
+        except (EOFError, KeyboardInterrupt):
+            return False
+    return False
 
 
 def register(spec: DatasetSpec) -> None:
@@ -74,12 +141,13 @@ def load(name: str, *, accept_license: bool = False, **loader_kwargs) -> Dataset
         except FileNotFoundError as exc:
             raise RuntimeError(_manual_message(spec, ddir, str(exc))) from None
 
-    if spec.policy == "auto_nc" and not accept_license:
+    if spec.policy == "auto_nc" and not _confirm_license(name, spec, accept_license):
         raise RuntimeError(
             f"'{name}' is licensed as: {spec.license}\n"
-            f"It is non-commercial / derivative-restricted. Re-run with "
-            f"accept_license=True to download from {spec.homepage} and accept these terms.\n"
-            f"Cite: {spec.citation}"
+            f"It is non-commercial / derivative-restricted, and acceptance was declined "
+            f"(or this is a non-interactive session). Re-run with accept_license=True, or "
+            f"call grouprec.accept_all() once, to download from {spec.homepage} and accept "
+            f"these terms.\nCite: {spec.citation}"
         )
 
     # auto / accepted auto_nc -> ensure download + extract, then load
@@ -89,7 +157,7 @@ def load(name: str, *, accept_license: bool = False, **loader_kwargs) -> Dataset
         download(spec.urls[0], archive_path, checksum=spec.checksum)
         extract(archive_path, ddir)
     if spec.policy == "auto_nc":
-        print(f"[grouprec] '{name}' license: {spec.license}. Cite: {spec.citation}")
+        _echo(f"[grouprec] '{name}' license: {spec.license}. Cite: {spec.citation}")
     return spec.loader(ddir, **loader_kwargs)
 
 

@@ -16,10 +16,10 @@ from ..data import Dataset
 from .consrec import GroupBenchmarkData, load_consrec
 from .groupim_format import load_groupim
 from .yin import fetch_yin, load_yin
-from .huggingface import from_huggingface
+from .huggingface import from_amazon_reviews, from_huggingface
 from .loaders import generic_interactions
 from .preprocess import binarize, filter_min_interactions, k_core
-from .registry import DatasetSpec, available, info, load
+from .registry import DatasetSpec, accept_all, available, info, load
 
 
 def from_path(path, **kwargs) -> Dataset:
@@ -38,8 +38,10 @@ __all__ = [
     "list",
     "info",
     "available",
+    "accept_all",
     "from_path",
     "from_huggingface",
+    "from_amazon_reviews",
     "load_consrec",
     "load_groupim",
     "load_yin",

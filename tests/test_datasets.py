@@ -56,6 +56,37 @@ def test_auto_nc_requires_license_acceptance(monkeypatch, tmp_path):
         gr.datasets.load("kgrec")  # no accept_license -> gated before any download
 
 
+def test_confirm_license_non_interactive_defaults_to_decline():
+    from grouprec.datasets import registry
+    spec = gr.datasets.info("kgrec")
+    # in pytest (no tty / no IPython) we must never block on input(): decline by default
+    assert registry._interactive() is False
+    assert registry._confirm_license("kgrec", spec, accept_license=False) is False
+    assert registry._confirm_license("kgrec", spec, accept_license=True) is True
+
+
+def test_confirm_license_interactive_prompt(monkeypatch):
+    from grouprec.datasets import registry
+    spec = gr.datasets.info("kgrec")
+    monkeypatch.setattr(registry, "_interactive", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *_: "y")
+    assert registry._confirm_license("kgrec", spec, accept_license=False) is True
+    monkeypatch.setattr("builtins.input", lambda *_: "")        # default = No
+    assert registry._confirm_license("kgrec", spec, accept_license=False) is False
+
+
+def test_accept_all_overrides_gate(monkeypatch):
+    from grouprec.datasets import registry
+    monkeypatch.setattr(registry, "_ACCEPT_ALL", False)        # isolate from other tests
+    spec = gr.datasets.info("kgrec")
+    assert registry._confirm_license("kgrec", spec, accept_license=False) is False
+    try:
+        gr.accept_all(output=None)                            # silent, session-wide
+        assert registry._confirm_license("kgrec", spec, accept_license=False) is True
+    finally:
+        registry._ACCEPT_ALL = False                          # reset global
+
+
 def test_manual_dataset_gives_instructions(monkeypatch, tmp_path):
     monkeypatch.setenv("GROUPREC_CACHE", str(tmp_path))
     with pytest.raises(RuntimeError, match="manually|Download|Homepage"):
@@ -154,3 +185,23 @@ def test_from_huggingface_requires_datasets():
         pass
     with pytest.raises(ImportError, match="datasets|huggingface"):
         gr.datasets.from_huggingface("foo/bar")
+
+
+def test_from_amazon_reviews_builds_expected_call(monkeypatch):
+    """from_amazon_reviews maps category -> raw_review_<cat> config + Amazon columns,
+    without hitting the network."""
+    from grouprec.datasets import huggingface
+    captured = {}
+
+    def fake_from_hf(repo_id, **kw):
+        captured["repo_id"] = repo_id
+        captured.update(kw)
+        return "DATASET"
+
+    monkeypatch.setattr(huggingface, "from_huggingface", fake_from_hf)
+    out = huggingface.from_amazon_reviews("Video_Games")
+    assert out == "DATASET"
+    assert captured["repo_id"] == "McAuley-Lab/Amazon-Reviews-2023"
+    assert captured["config"] == "raw_review_Video_Games"
+    assert captured["user_col"] == "user_id" and captured["item_col"] == "parent_asin"
+    assert captured["trust_remote_code"] is True

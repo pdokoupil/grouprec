@@ -7,6 +7,7 @@ API. See the design doc for the full scope; this is an in-progress build.
 from __future__ import annotations
 
 from . import aggregators, backends, datasets, groups, references, split
+from .datasets import accept_all
 from .bench import BenchmarkResult, BenchmarkTask, benchmark
 from .bench.leaderboard import LeaderboardStore
 from .data import Dataset, Groups, make_blobs_dataset
@@ -38,6 +39,7 @@ __all__ = [
     "aggregators",
     "backends",
     "datasets",
+    "accept_all",
     "groups",
     "split",
     "Dataset",
