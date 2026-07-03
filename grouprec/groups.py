@@ -168,6 +168,118 @@ def build_outlier_group(sim, size, high, low, rng, max_tries=1000):
     return None
 
 
+def derive_group_interactions(
+    data: Dataset,
+    groups: Groups,
+    *,
+    like_threshold: float = 4.0,
+    min_members: int = 2,
+    predicate=None,
+) -> dict[int, list]:
+    """Derive a per-group item signal from the members' *individual* feedback.
+
+    When only individual user--item data and (synthetic) groups are available, deep
+    group models and group-level evaluation still need a per-group signal (which items
+    "belong" to a group). Rather than *simulating* group choices, this synthesises one
+    deterministically from what the members themselves liked, under a transparent and
+    fully overridable rule.
+
+    Default rule -- *majority consensus*: an item is a group interaction if at least
+    ``min_members`` members liked it, where a "like" is ``rating >= like_threshold``
+    (or any recorded interaction when the dataset has no ratings). This is the notion
+    the interactive case study surfaces as a group's "consensus items".
+
+    Parameters
+    ----------
+    like_threshold : rating at/above which a member is considered to like an item.
+    min_members : how many members must like an item for it to count (majority rule).
+    predicate : optional ``f(n_likes, n_members) -> bool`` that overrides the majority
+        rule entirely, e.g. ``lambda l, m: l == m`` (unanimity) or ``lambda l, m: l >= 1``
+        ("any member"). It receives, per candidate item, the number of members who liked
+        it and the group size.
+
+    Returns
+    -------
+    dict[int, list]
+        Group index -> list of item ids, the format consumed by the deep models and by
+        :func:`grouprec.models.data.make_synthetic_group_data`.
+    """
+    from collections import Counter
+
+    df = data.interactions
+    liked_df = df[df["rating"] >= like_threshold] if data.has_ratings else df
+    liked = {int(u): set(int(i) for i in sub["item"]) for u, sub in liked_df.groupby("user")}
+    rule = predicate or (lambda n_likes, n_members: n_likes >= min_members)
+
+    out: dict[int, list] = {}
+    for gi, members in enumerate(groups):
+        counts: Counter = Counter()
+        for u in members:
+            counts.update(liked.get(int(u), ()))
+        m = len(list(members))
+        out[gi] = [it for it, c in counts.items() if rule(c, m)]
+    return out
+
+
+def seen_items(data: Dataset, members, *, by: str | None = "any") -> set:
+    """Item ids a group's members have already consumed -- the set usually excluded when
+    recommending to a group (don't recommend what a member already has).
+
+    The two families use different candidate conventions: aggregators rank *all* items
+    minus the seen set, while the deep-model literature ranks a sampled 1-vs-N pool
+    (see :func:`sample_candidates`). ``by`` parametrizes which "seen" set to exclude:
+
+    * ``"any"`` (default) -- items consumed by **at least one** member. Matches the
+      ``exclude_seen=True`` convention used by the evaluators.
+    * ``"all"``           -- only items consumed by **every** member.
+    * ``None``            -- the empty set (rank everything).
+
+    Returns a ``set`` of item ids; pass it straight to ``recommend(..., exclude=...)``.
+    """
+    if by is None:
+        return set()
+    ui = data.user_index
+    per_member = [set(int(x) for x in data.items[data.items_seen_by(u)])
+                  for u in members if u in ui]
+    if not per_member:
+        return set()
+    if by == "any":
+        return set().union(*per_member)
+    if by == "all":
+        return set.intersection(*per_member)
+    raise ValueError(f"by must be 'any', 'all', or None; got {by!r}")
+
+
+def candidate_items(data: Dataset, members, *, exclude_seen: str | None = "any") -> np.ndarray:
+    """Full-ranking candidate item ids for a group: all dataset items minus the seen set
+    (``exclude_seen`` = ``"any"`` / ``"all"`` / ``None``; see :func:`seen_items`).
+
+    This is the candidate convention typical for *aggregators*. Returns ids in dataset
+    order; pass to ``recommend(..., candidates=...)`` (equivalently, use
+    :func:`seen_items` with ``recommend(..., exclude=...)``)."""
+    seen = seen_items(data, members, by=exclude_seen)
+    return np.array([int(it) for it in data.items if int(it) not in seen], dtype=np.int64)
+
+
+def sample_candidates(data: Dataset, members, positives, *, n_negatives: int,
+                      exclude_seen: str | None = "any", seed: int | None = None) -> list:
+    """Sampled 1-vs-N candidate list -- the protocol used by the deep GRS models
+    (GroupIM / AGREE / ConsRec): the ``positives`` item id(s) plus ``n_negatives`` ids
+    sampled uniformly without replacement from items no member has consumed
+    (``exclude_seen`` policy) and not already a positive.
+
+    Returns ``[*positives, *negatives]``; pass to ``recommend(..., candidates=...)``.
+    Fewer than ``n_negatives`` are returned if the pool is smaller."""
+    positives = ([int(positives)] if isinstance(positives, (int, np.integer))
+                 else [int(p) for p in positives])
+    seen = seen_items(data, members, by=exclude_seen)
+    posset = set(positives)
+    pool = [int(it) for it in data.items if int(it) not in seen and int(it) not in posset]
+    k = min(int(n_negatives), len(pool))
+    negs = np.random.default_rng(seed).choice(pool, size=k, replace=False).tolist() if k else []
+    return positives + [int(x) for x in negs]
+
+
 def _meta(kind, size, n, metric, seed, sim_high, sim_low) -> dict:
     return {
         "kind": kind, "size": size, "n_requested": n,

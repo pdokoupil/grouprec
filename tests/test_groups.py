@@ -9,7 +9,72 @@ import pytest
 from grouprec import make_blobs_dataset
 from grouprec.groups import (
     synthetic, similarity_matrix, build_predicate_group, build_outlier_group,
+    derive_group_interactions, seen_items, candidate_items, sample_candidates,
 )
+from grouprec import Dataset, Groups
+
+
+def test_derive_group_interactions_majority_and_overrides():
+    import pandas as pd
+    # 3 users; item 10 liked by u0,u1 (majority); item 20 liked only by u2; item 30 by all.
+    df = pd.DataFrame({
+        "user": [0, 0, 1, 1, 2, 2, 2],
+        "item": [10, 30, 10, 30, 20, 30, 40],
+        "rating": [5, 5, 4, 5, 5, 5, 2],   # item 40 rated 2 (below like threshold)
+    })
+    data = Dataset(df, name="t")
+    groups = Groups([np.array([0, 1, 2])])
+
+    # default majority (>=2 members): items 10 (u0,u1) and 30 (all); NOT 20 (one) or 40 (disliked)
+    out = derive_group_interactions(data, groups, like_threshold=4, min_members=2)
+    assert sorted(out[0]) == [10, 30]
+    # unanimity override: only item 30
+    unan = derive_group_interactions(data, groups, predicate=lambda l, m: l == m)
+    assert unan[0] == [30]
+    # "any member" override: 10, 20, 30 (40 still below the like threshold)
+    any_m = derive_group_interactions(data, groups, predicate=lambda l, m: l >= 1)
+    assert sorted(any_m[0]) == [10, 20, 30]
+
+
+def _candidate_fixture():
+    import pandas as pd
+    # user 0 -> {10,30}, user 1 -> {10,30}, user 2 -> {20,30,40}; items = {10,20,30,40}
+    df = pd.DataFrame({"user": [0, 0, 1, 1, 2, 2, 2],
+                       "item": [10, 30, 10, 30, 20, 30, 40],
+                       "rating": [5, 5, 4, 5, 5, 5, 3]})
+    return Dataset(df, name="cand")
+
+
+def test_seen_items_any_all_none():
+    data = _candidate_fixture()
+    members = [0, 1, 2]
+    assert seen_items(data, members, by="any") == {10, 20, 30, 40}      # union
+    assert seen_items(data, members, by="all") == {30}                  # intersection
+    assert seen_items(data, members, by=None) == set()
+    assert seen_items(data, [0, 1], by="all") == {10, 30}
+    # unknown members are ignored, not errors
+    assert seen_items(data, [0, 999], by="any") == {10, 30}
+
+
+def test_candidate_items_excludes_seen():
+    data = _candidate_fixture()
+    # aggregator convention: all items minus those seen by any of {0,1} = {10,30}
+    assert candidate_items(data, [0, 1], exclude_seen="any").tolist() == [20, 40]
+    assert candidate_items(data, [0, 1], exclude_seen=None).tolist() == [10, 20, 30, 40]
+    # exclude items seen by ALL of {0,1,2} (= {30}) -> everything but 30
+    assert candidate_items(data, [0, 1, 2], exclude_seen="all").tolist() == [10, 20, 40]
+
+
+def test_sample_candidates_1_vs_n():
+    data = _candidate_fixture()
+    # positive 20, negatives sampled from items unseen by {0,1} (seen {10,30}) minus pos
+    # -> only {40} available
+    out = sample_candidates(data, [0, 1], 20, n_negatives=5, exclude_seen="any", seed=0)
+    assert out[0] == 20 and set(out[1:]) == {40}          # capped at pool size
+    # deterministic under a seed; positives may be a list
+    a = sample_candidates(data, [0], [40], n_negatives=2, exclude_seen=None, seed=1)
+    b = sample_candidates(data, [0], [40], n_negatives=2, exclude_seen=None, seed=1)
+    assert a == b and a[0] == 40 and len(a) == 3
 
 
 def test_kind_callable_custom_builder():
