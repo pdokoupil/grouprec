@@ -25,3 +25,7 @@ site/
 
 # internal-only paper draft (do not publish)
 docs/demonstration.tex
+
+# internal working notes (local only — never publish)
+DELIVERED.md
+NEXT_STEPS.md
