@@ -10,6 +10,7 @@ from grouprec import make_blobs_dataset
 from grouprec.groups import (
     synthetic, similarity_matrix, build_predicate_group, build_outlier_group,
     derive_group_interactions, seen_items, candidate_items, sample_candidates,
+    group_similarity,
 )
 from grouprec import Dataset, Groups
 
@@ -75,6 +76,40 @@ def test_sample_candidates_1_vs_n():
     a = sample_candidates(data, [0], [40], n_negatives=2, exclude_seen=None, seed=1)
     b = sample_candidates(data, [0], [40], n_negatives=2, exclude_seen=None, seed=1)
     assert a == b and a[0] == 40 and len(a) == 3
+
+
+def test_group_similarity_within_cross_and_subgroups():
+    import math
+    data = make_blobs_dataset(n_users=6, n_items=12, n_clusters=2, seed=0)
+    u = data.users.tolist()
+    # precomputed similarity (users 0,1,2 similar; 3,4,5 similar; cross low) for exact checks
+    S = np.array([
+        [1.0, 0.9, 0.8, 0.1, 0.2, 0.0],
+        [0.9, 1.0, 0.7, 0.0, 0.1, 0.2],
+        [0.8, 0.7, 1.0, 0.2, 0.0, 0.1],
+        [0.1, 0.0, 0.2, 1.0, 0.9, 0.8],
+        [0.2, 0.1, 0.0, 0.9, 1.0, 0.7],
+        [0.0, 0.2, 0.1, 0.8, 0.7, 1.0],
+    ])
+    core = u[:3]
+    # within-group cohesion: mean/min/max over the 3 pairs (0.9, 0.8, 0.7)
+    assert abs(group_similarity(data, core, metric=S) - 0.8) < 1e-9
+    assert group_similarity(data, core, metric=S, reduce="min") == 0.7
+    assert group_similarity(data, core, metric=S, reduce="max") == 0.9
+    # between a similar core and the "outlier" subgroup {3,4,5}
+    assert abs(group_similarity(data, core, other=u[3:], metric=S) - 0.1) < 1e-9
+    # between two size-2 subgroups
+    assert abs(group_similarity(data, u[:2], other=u[3:5], metric=S)
+               - float(np.mean([0.1, 0.2, 0.0, 0.1]))) < 1e-9
+    # reduce=None returns the raw matrix (within) / block (cross)
+    assert group_similarity(data, core, metric=S, reduce=None).shape == (3, 3)
+    assert group_similarity(data, u[:2], other=u[3:5], metric=S, reduce=None).shape == (2, 2)
+    # a singleton has no pairs -> nan; builtin metrics stay in range
+    assert math.isnan(group_similarity(data, [u[0]], metric=S))
+    assert -1.0 <= group_similarity(data, core, metric="cosine") <= 1.0
+    # matches the metric used to form similar groups (mean pairwise is high)
+    g = synthetic(data, kind="similar", size=3, n=1, metric="cosine", sim_high=0.2, seed=0)
+    assert group_similarity(data, list(g[0]), metric="cosine") >= 0.2
 
 
 def test_kind_callable_custom_builder():

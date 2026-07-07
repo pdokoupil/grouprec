@@ -64,6 +64,89 @@ def similarity_matrix(data: Dataset, metric="pearson") -> np.ndarray:
     return s
 
 
+def _similarity_among(data: Dataset, user_ids, metric) -> np.ndarray:
+    """Pairwise user-user similarity among *just* ``user_ids`` (diagonal = ``nan``).
+
+    Pearson/cosine/jaccard are pairwise-independent, so we compute them directly on the
+    members' rows (exact, and cheap even for huge user bases); callable/precomputed
+    metrics fall back to the full :func:`similarity_matrix` and are subset."""
+    idx = np.array([data.user_index[u] for u in user_ids], dtype=int)
+    if idx.size <= 1:
+        return np.full((idx.size, idx.size), np.nan)
+    if not isinstance(metric, str):                                  # callable / precomputed
+        S = similarity_matrix(data, metric)[np.ix_(idx, idx)]
+    elif metric == "jaccard":
+        b = (data.user_item_matrix(value="binary") > 0)[idx].astype(float)
+        inter = b @ b.T
+        sizes = b.sum(1)
+        union = sizes[:, None] + sizes[None, :] - inter
+        with np.errstate(divide="ignore", invalid="ignore"):
+            S = np.where(union > 0, inter / union, np.nan)
+    elif metric in ("pearson", "cosine"):
+        m = data.user_item_matrix(value="rating")[idx]
+        if metric == "pearson":
+            with np.errstate(invalid="ignore"):
+                S = np.corrcoef(m)
+        else:
+            norm = np.linalg.norm(m, axis=1)
+            denom = np.outer(norm, norm)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                S = np.where(denom > 0, (m @ m.T) / denom, np.nan)
+    else:
+        raise ValueError(f"unknown metric {metric!r}; use 'pearson'/'cosine'/'jaccard', "
+                         "a callable, or a precomputed matrix.")
+    S = np.array(S, dtype=float)
+    np.fill_diagonal(S, np.nan)
+    return S
+
+
+def group_similarity(data: Dataset, members, *, other=None, metric="pearson",
+                     reduce: str | None = "mean"):
+    """User-user similarity for a group -- or *between* two (sub)groups.
+
+    Works for **any** group (synthetic or a real group from data), and composes to
+    arbitrary sub-groups because ``members`` and ``other`` are just user-id lists:
+
+    * within a group / sub-group -- ``group_similarity(data, members)`` gives the mean
+      pairwise similarity (the "cohesion"); pass a subset for a sub-group's cohesion.
+    * between two (sub-)groups -- pass ``other=[...]`` to get the mean cross-similarity,
+      e.g. an outlier's ``[u4]`` against its similar core ``[u1, u2, u3]``, or any two
+      size-2 halves against each other.
+
+    Parameters
+    ----------
+    metric : ``"pearson"`` / ``"cosine"`` / ``"jaccard"``, a callable ``f(data) -> (n,n)``
+        matrix, or a precomputed ``(n_users, n_users)`` matrix -- the same options as
+        :func:`synthetic`, so cohesion is measured with the metric groups were formed by.
+    reduce : ``"mean"`` (default) / ``"min"`` / ``"max"`` / ``"median"`` over the relevant
+        pairs, or ``None`` to return the raw similarity matrix (within) / block (cross);
+        ``nan`` self- and undefined pairs are ignored.
+
+    Returns a float (reduced) or an ``np.ndarray`` (``reduce=None``); an all-``nan`` set
+    of pairs (e.g. a singleton group) reduces to ``nan``.
+    """
+    members = list(members)
+    if other is None:
+        S = _similarity_among(data, members, metric)
+        if reduce is None:
+            return S
+        vals = S[np.triu_indices(len(members), k=1)]
+    else:
+        other = list(other)
+        S = _similarity_among(data, members + other, metric)
+        block = S[:len(members), len(members):]
+        if reduce is None:
+            return block
+        vals = block.ravel()
+    vals = vals[~np.isnan(vals)]
+    if vals.size == 0:
+        return float("nan")
+    fns = {"mean": np.mean, "min": np.min, "max": np.max, "median": np.median}
+    if reduce not in fns:
+        raise ValueError(f"reduce must be one of {sorted(fns)} or None; got {reduce!r}")
+    return float(fns[reduce](vals))
+
+
 def build_predicate_group(sim, size, predicate, rng, max_tries=1000):
     """Grow a group of ``size`` users where each added member satisfies ``predicate``
     against *all* current members. Returns user indices or ``None`` if it stalls.
