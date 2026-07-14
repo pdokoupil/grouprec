@@ -72,7 +72,7 @@ group-interaction derivation; the script does data prep, the SAE explanation lay
 | **Candidate pool** (50) | the consensus positive + 49 negatives sampled uniformly without replacement (per-group seed) from items **no** member rated |
 | **Recs received** (3 per member) | the member's top-3 candidates by EASE score (descending; stable ties) |
 | **Top-5 recommendations** | top-5 by group score (score-based) / by the aggregator's selection order (EP-FuzzDA); stable ties |
-| **Latent concepts** (3 per member) | the SAE features with highest mean activation over the member's rated items (stable ties) |
+| **Latent concepts** (3 per member) | the SAE features with the highest *lift* over the member's rated items — member mean activation ÷ global mean, i.e. what is distinctive about the member rather than globally strongest (stable ties) |
 | **Concept exemplars** (3 films) | the items with highest activation for that SAE feature (stable ties); the feature's genre label is the dominant genre of its top-8 items |
 
 "Stable ties" = `numpy.argsort(..., kind="stable")`, i.e. ties resolved by ascending index — reproducible across runs.
@@ -108,13 +108,27 @@ member weights.
 We reuse the **Top-K sparse autoencoder** from `umap2026/sae.py` and adapt it minimally:
 standardised input, an L2-unit-norm decoder, ReLU encoder, and a hard **top-K=6** activation
 (so each embedding is explained by at most 6 latent atoms), trained with MSE + a small L1
-penalty. We fit it on **GroupIM's item embeddings** — the rows of its `group_predictor`
-weight matrix, i.e. one learned vector per movie. Each latent feature is then **named by the
-dominant genre** of its top-activating movies (using the `movies.csv` genre labels), turning
-opaque dimensions into readable concepts (e.g. "Sci-Fi / Drama"). A member is tagged with a
-concept because the films they watched activate it; the films listed beside a concept are its
-global exemplars, so they need not be in the member's own history. The SAE is only an
-*explanation of members* — it is **not** part of the models' steering.
+penalty. We fit it on **GroupIM's item embeddings** — specifically the rows of its
+**`encoder.user_predictor`** weight matrix, i.e. one learned vector per movie. Each latent
+feature is then **named by the dominant genre** of its top-activating movies (using the
+`movies.csv` genre labels), turning opaque dimensions into readable concepts (e.g.
+"Drama / Musical"). A member is tagged with a concept because the films they watched activate
+it; the films listed beside a concept are its global exemplars, so they need not be in the
+member's own history. The SAE is only an *explanation of members* — it is **not** part of the
+models' steering.
+
+**Why the encoder head, and why "lift".** We originally fit the SAE on `group_predictor`
+and every member came out with the same concepts. The reason: `group_predictor` is trained
+on only *|groups|* target distributions (9 here), so its item space collapses onto
+popularity — a single direction explained ~66% of the variance and correlated ≈ −0.68 with
+item popularity, and the SAE simply decomposed *popularity* (whose top items are, by
+construction, the most common genres). The `encoder.user_predictor` head is **pretrained over
+all users**, so it carries actual taste structure. Independently, selecting a member's
+concepts by raw mean activation returns whatever is globally strongest, so we select by
+**lift** (the member's mean activation ÷ the global mean), i.e. what is *distinctive* about
+that member. Together these took the demo from 3 to 17 distinct concept sets over 27 members
+— members of *similar* groups still share concepts (as they should), while *divergent*
+groups' members visibly differ.
 
 ## How the data is shipped (offline → one file)
 

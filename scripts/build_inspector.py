@@ -300,10 +300,16 @@ def build(out: Path) -> None:
     print("[fit] GroupIM ...", flush=True)
     groupim = GroupIM(groups, group_interactions, epochs=40, pretrain_epochs=10, seed=0).fit(data)
 
-    # ---- SAE on GroupIM item embeddings (group_predictor rows), labelled by genre ---- #
-    print("[fit] Top-K SAE on GroupIM item embeddings ...", flush=True)
-    item_emb = groupim.net_.group_predictor.weight.detach().cpu().numpy()    # (n_items, d)
+    # ---- SAE on GroupIM item embeddings, labelled by genre ---- #
+    # NB: we use the ENCODER's user_predictor rows, not group_predictor. The group_predictor is
+    # trained on only |groups| target distributions, so its item space collapses onto popularity
+    # (one PC explains ~66% of variance, corr ~-0.68 with item popularity) and every member ends
+    # up with the same "concepts". The encoder head is pretrained over *all* users, so it actually
+    # carries taste structure.
+    print("[fit] Top-K SAE on GroupIM encoder item embeddings ...", flush=True)
+    item_emb = groupim.net_.encoder.user_predictor.weight.detach().cpu().numpy()   # (n_items, d)
     Z = fit_topk_sae(item_emb)
+    Z_global = Z.mean(0) + 1e-9        # for distinctiveness ("lift") based concept selection
     Gmat = np.array([genre_vecs.get(int(items_arr[idx]), np.zeros(len(genres))) for idx in range(len(items_arr))])
 
     def feature_label(f):
@@ -351,8 +357,11 @@ def build(out: Path) -> None:
         for mi, m in enumerate(mset):
             hist = [h for h in rated_top.get(m, []) if h in titles][:N_HISTORY]
             hidx = [ii[h] for h in rated_top.get(m, []) if h in ii]
-            # SUBSET RULE (concepts): top-N_SAE_FEATS features by mean activation over the member's items (stable ties).
-            top_feats = np.argsort(-Z[hidx].mean(0), kind="stable")[:N_SAE_FEATS].tolist() if hidx else [0, 1, 2]
+            # SUBSET RULE (concepts): top-N_SAE_FEATS features by *lift* -- the member's mean
+            # activation divided by the global mean, i.e. what is distinctive about this member
+            # rather than what is globally strongest (stable ties).
+            top_feats = (np.argsort(-(Z[hidx].mean(0) / Z_global), kind="stable")[:N_SAE_FEATS].tolist()
+                         if hidx else [0, 1, 2])
             sae = [{"label": feat_cache[f][0], "items": feat_cache[f][1]} for f in top_feats]
             members_out.append({
                 "uid": m, "label": f"User {m}", "initials": f"U{m}",
