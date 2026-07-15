@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Iterable
 
 import numpy as np
+from scipy import sparse
 
 from .backends import BaseRecommender
 from .data import Dataset
@@ -47,7 +48,7 @@ class ProfileGroupRecommender:
             )
         self.base.fit(dataset)
         self.dataset_ = dataset
-        self.M_ = dataset.user_item_matrix(value="binary" if self.binarize else "rating")
+        self.M_ = dataset.user_item_csr(value="binary" if self.binarize else "rating")
         return self
 
     def _profile(self, members) -> np.ndarray:
@@ -55,6 +56,9 @@ class ProfileGroupRecommender:
         if not idx:
             return np.zeros(self.dataset_.n_items)
         rows = self.M_[idx]
+        if sparse.issparse(rows):
+            # Only the members' own rows are densified -- (n_members, n_items), tiny.
+            rows = rows.toarray()
         if self.merge == "average":
             return rows.mean(axis=0)
         if self.merge == "union":

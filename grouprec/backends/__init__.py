@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 import numpy as np
+from scipy import sparse
 
 from ..data import Dataset
 
@@ -98,17 +99,19 @@ class Random(_FittedMixin):
 class _UserMatrixMixin(_FittedMixin):
     """Shared scoring for item-similarity models that score ``x_u @ W``."""
 
-    X_: np.ndarray
+    X_: np.ndarray  # user-item interactions; dense or scipy.sparse CSR
     W_: np.ndarray  # item-item weights/similarity (n_items, n_items)
 
     def score(self, users, items=None) -> np.ndarray:
         self._check_fitted()
-        rows = []
-        for u in users:
-            ui = self.dataset_.user_index.get(u)
-            x = self.X_[ui] if ui is not None else np.zeros(self.dataset_.n_items)
-            rows.append(x @ self.W_)
-        s = np.vstack(rows)
+        # Gather the requested users' rows in one shot: for a CSR X_ this is a sparse
+        # row-slice @ dense W_, which stays sparse on the left and never materialises
+        # the full user-item matrix. Unknown users score as an all-zero profile.
+        idx = [self.dataset_.user_index.get(u) for u in users]
+        pos = [j for j, i in enumerate(idx) if i is not None]
+        s = np.zeros((len(idx), self.dataset_.n_items), dtype=float)
+        if pos:
+            s[pos] = np.asarray(self.X_[[idx[j] for j in pos]] @ self.W_)
         cols = self._item_cols(items)
         return s[:, cols] if items is not None else s
 
@@ -138,8 +141,10 @@ class EASE(_UserMatrixMixin):
 
     def fit(self, dataset: Dataset) -> "EASE":
         self.dataset_ = dataset
-        X = dataset.user_item_matrix(value="binary" if self.binarize else "rating")
-        G = X.T @ X
+        # Sparse X keeps memory at O(nnz); the Gram matrix is (n_items, n_items) and
+        # is dense by nature -- that, not the interactions, is EASE's real size limit.
+        X = dataset.user_item_csr(value="binary" if self.binarize else "rating")
+        G = np.asarray((X.T @ X).todense())
         diag = np.diag_indices(G.shape[0])
         G[diag] += self.reg
         P = np.linalg.inv(G)
@@ -165,10 +170,10 @@ class ItemKNN(_UserMatrixMixin):
 
     def fit(self, dataset: Dataset) -> "ItemKNN":
         self.dataset_ = dataset
-        X = dataset.user_item_matrix(value="binary" if self.binarize else "rating")
-        norm = np.linalg.norm(X, axis=0)
-        Xn = X / np.where(norm > 0, norm, 1.0)
-        S = Xn.T @ Xn
+        X = dataset.user_item_csr(value="binary" if self.binarize else "rating")
+        norm = np.sqrt(np.asarray(X.multiply(X).sum(axis=0)).ravel())
+        Xn = X @ sparse.diags(1.0 / np.where(norm > 0, norm, 1.0))
+        S = np.asarray((Xn.T @ Xn).todense())
         np.fill_diagonal(S, 0.0)
         if self.k is not None and self.k < S.shape[0]:
             # keep only the top-k neighbours per item (zero the rest)

@@ -19,6 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..data import Dataset, Groups
+from ._sparse import CsrRows
 from .data import normalize_group_interactions
 
 
@@ -152,8 +153,9 @@ class GroupIM:
             torch.manual_seed(self.seed)
         self.dataset_ = dataset
         n_items = dataset.n_items
-        self.M_ = torch.as_tensor(dataset.user_item_matrix(value="binary"),
-                                  dtype=torch.float32, device=self.device)
+        # CSR-backed: rows are densified per access, so memory is O(nnz) rather than
+        # O(n_users * n_items) -- the difference between 400 MB and 50 GB on ML-32M.
+        self.M_ = CsrRows(dataset.user_item_csr(value="binary"), device=self.device)
         ui = dataset.user_index
         ii = dataset.item_index
         self._members = [np.array([ui[u] for u in m if u in ui], dtype=np.int64)

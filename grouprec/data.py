@@ -9,10 +9,13 @@ id-based data.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:  # avoids importing scipy at module import time
+    from scipy import sparse
 
 
 class Dataset:
@@ -43,6 +46,9 @@ class Dataset:
             else np.sort(self.interactions["item"].unique())
         self.user_index = {u: i for i, u in enumerate(self.users)}
         self.item_index = {it: j for j, it in enumerate(self.items)}
+        # Memoised heavy views (the CSR interaction matrix); Dataset is treated as
+        # immutable -- every mutator returns a new Dataset, so this never goes stale.
+        self._cache: dict = {}
 
     # -- basic properties ---------------------------------------------------- #
     @property
@@ -90,21 +96,57 @@ class Dataset:
         return cls(df.rename(columns=cols)[list(cols.values())], name=name)
 
     # -- views --------------------------------------------------------------- #
+    def _coords(self, value: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """(row, col, data) triplet for the interaction matrix."""
+        ui = self.interactions["user"].map(self.user_index).to_numpy()
+        ij = self.interactions["item"].map(self.item_index).to_numpy()
+        if value == "binary" or not self.has_ratings:
+            v = np.ones(len(ui), dtype=float)
+        elif value == "rating":
+            v = self.interactions["rating"].to_numpy(dtype=float)
+        else:
+            raise ValueError("value must be 'rating' or 'binary'.")
+        return ui, ij, v
+
+    def user_item_csr(self, value: str = "rating") -> "sparse.csr_matrix":
+        """Sparse ``(n_users, n_items)`` CSR matrix in ``users`` x ``items`` order.
+
+        The memory-safe counterpart of :meth:`user_item_matrix`: interaction data is
+        typically >99% sparse, so this is the form every internal consumer uses. A
+        MovieLens-32M rating matrix is ~50 GB dense but ~400 MB as CSR.
+
+        Duplicate (user, item) pairs are summed by ``csr_matrix``; call
+        :meth:`binarize` first if that matters.
+
+        Interops with torch by densifying **per batch** (``batch.toarray()``), which is
+        what the deep models do -- never densify the whole matrix.
+        """
+        from scipy import sparse
+
+        key = ("csr", value if self.has_ratings else "binary")
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        ui, ij, v = self._coords(value)
+        m = sparse.csr_matrix((v, (ui, ij)), shape=(self.n_users, self.n_items))
+        m.sum_duplicates()
+        self._cache[key] = m
+        return m
+
     def user_item_matrix(self, value: str = "rating", fill: float = 0.0) -> np.ndarray:
         """Dense ``(n_users, n_items)`` matrix in ``users`` x ``items`` order.
 
         ``value="rating"`` uses the rating column (falling back to binary if absent);
         ``value="binary"`` marks 1 for any interaction.
+
+        .. warning::
+           Allocates ``n_users * n_items * 8`` bytes -- 50 GB on MovieLens-32M. Prefer
+           :meth:`user_item_csr`; this stays for small data, tests, and callers that
+           genuinely need a dense array.
         """
-        ui = self.interactions["user"].map(self.user_index).to_numpy()
-        ij = self.interactions["item"].map(self.item_index).to_numpy()
+        ui, ij, v = self._coords(value)
         mat = np.full((self.n_users, self.n_items), float(fill))
-        if value == "binary" or not self.has_ratings:
-            mat[ui, ij] = 1.0
-        elif value == "rating":
-            mat[ui, ij] = self.interactions["rating"].to_numpy(dtype=float)
-        else:
-            raise ValueError("value must be 'rating' or 'binary'.")
+        mat[ui, ij] = v
         return mat
 
     def items_seen_by(self, user) -> np.ndarray:

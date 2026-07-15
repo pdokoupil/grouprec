@@ -14,12 +14,110 @@ Kinds (cf. the Coupled/Decoupled and group-formation literature):
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 import numpy as np
 
 from .data import Dataset, Groups
 
 
-def similarity_matrix(data: Dataset, metric="pearson") -> np.ndarray:
+class LazySimilarity:
+    """Row-lazy user-user similarity with an LRU row cache.
+
+    A dense ``n_users x n_users`` matrix is 334 GB at 200k users, but the group builders
+    only ever read whole **rows** (``sim[member]``) and only a handful of them -- growing
+    one group touches ~``size`` rows. So we compute rows on demand and cache the most
+    recent ``cache_rows``.
+
+    Rows are **exact**, not approximated. For rows centred over all ``n`` items,
+    ``cov(i,j) = (1/n)(x_i . x_j) - mu_i*mu_j`` and ``sd(i)^2 = (1/n)(x_i . x_i) - mu_i^2``,
+    so a Pearson row is one sparse product ``X @ X[i].T`` plus two precomputed length-n_users
+    vectors -- never densifying, and matching :func:`similarity_matrix` to float tolerance.
+
+    Duck-types the dense array where the builders touch it: ``.shape`` and ``sim[i]``.
+    """
+
+    __slots__ = ("X", "mu", "sd", "n_users", "n_items", "metric", "_cache", "_cap",
+                 "hits", "misses")
+
+    def __init__(self, data: Dataset, metric: str = "pearson", *,
+                 cache_rows: int = 512) -> None:
+        if metric not in ("pearson", "cosine", "jaccard"):
+            raise ValueError(f"LazySimilarity supports pearson/cosine/jaccard; got {metric!r}")
+        self.metric = metric
+        value = "binary" if metric == "jaccard" else "rating"
+        X = data.user_item_csr(value=value).astype(np.float64)
+        if metric == "jaccard":
+            X.data[:] = 1.0
+        self.X = X
+        self.n_users, self.n_items = X.shape
+        sq = np.asarray(X.multiply(X).sum(axis=1)).ravel()
+        if metric == "pearson":
+            self.mu = np.asarray(X.sum(axis=1)).ravel() / self.n_items
+            self.sd = np.sqrt(np.maximum(sq / self.n_items - self.mu ** 2, 0.0))
+        elif metric == "cosine":
+            self.mu = None
+            self.sd = np.sqrt(sq)                 # L2 norms
+        else:                                     # jaccard: |A| per user
+            self.mu = None
+            self.sd = np.asarray(X.sum(axis=1)).ravel()
+        self._cache: OrderedDict = OrderedDict()
+        self._cap = int(cache_rows)
+        self.hits = self.misses = 0
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (self.n_users, self.n_users)
+
+    def _compute_row(self, i: int) -> np.ndarray:
+        dots = np.asarray((self.X @ self.X[i].T).todense()).ravel()
+        with np.errstate(divide="ignore", invalid="ignore"):
+            if self.metric == "pearson":
+                cov = dots / self.n_items - self.mu[i] * self.mu
+                row = np.where(self.sd[i] * self.sd > 0, cov / (self.sd[i] * self.sd), np.nan)
+            elif self.metric == "cosine":
+                denom = self.sd[i] * self.sd
+                row = np.where(denom > 0, dots / denom, np.nan)
+            else:                                  # jaccard
+                union = self.sd[i] + self.sd - dots
+                row = np.where(union > 0, dots / union, np.nan)
+        row[i] = np.nan                            # matches np.fill_diagonal(s, nan)
+        return row
+
+    def __getitem__(self, i):
+        if not isinstance(i, (int, np.integer)):
+            raise TypeError(
+                "LazySimilarity supports single-row access (sim[i]) only; a full "
+                "materialised matrix would defeat its purpose. Use "
+                "similarity_matrix(..., lazy=False) if you need the dense array."
+            )
+        i = int(i)
+        row = self._cache.get(i)
+        if row is not None:
+            self.hits += 1
+            self._cache.move_to_end(i)
+            return row
+        self.misses += 1
+        row = self._compute_row(i)
+        self._cache[i] = row
+        if len(self._cache) > self._cap:
+            self._cache.popitem(last=False)        # evict least-recently-used
+        return row
+
+    def cache_stats(self) -> dict:
+        total = self.hits + self.misses
+        return {"rows_computed": self.misses, "hits": self.hits,
+                "hit_rate": (self.hits / total) if total else 0.0,
+                "cached_rows": len(self._cache),
+                "cache_bytes": len(self._cache) * self.n_users * 8}
+
+
+def _dense_sim_gib(n_users: int) -> float:
+    return n_users * n_users * 8 / 1024 ** 3
+
+
+def similarity_matrix(data: Dataset, metric="pearson", *, lazy: str | bool = "auto",
+                      max_dense_gib: float = 2.0, cache_rows: int = 512):
     """User-user similarity matrix (``n_users x n_users``); diagonal is ``nan``.
 
     ``metric`` may be:
@@ -32,7 +130,27 @@ def similarity_matrix(data: Dataset, metric="pearson") -> np.ndarray:
 
     Pairs with undefined similarity (e.g. zero-variance rows for Pearson) are ``nan``
     and therefore never satisfy a similarity predicate.
+
+    ``lazy`` controls materialisation:
+
+    * ``"auto"`` (default) -- return a :class:`LazySimilarity` when the dense matrix
+      would exceed ``max_dense_gib``, else the dense array. Small data keeps the fast
+      vectorised path; large data stops being an ``OOM``.
+    * ``True`` / ``False`` -- force either. Forcing ``lazy=True`` is only valid for the
+      built-in string metrics; callable/precomputed metrics are dense by definition.
+
+    A ``LazySimilarity`` supports ``.shape`` and ``sim[i]``, which is all the group
+    builders use -- but it is *not* an ndarray, so ``lazy=False`` is required if you want
+    to slice or broadcast over the whole matrix.
     """
+    if lazy is True and not isinstance(metric, str):
+        raise ValueError("lazy=True requires a built-in metric (pearson/cosine/jaccard); "
+                         "callable/precomputed metrics are inherently dense.")
+    if isinstance(metric, str) and metric in ("pearson", "cosine", "jaccard"):
+        want_lazy = (lazy is True) or (
+            lazy == "auto" and _dense_sim_gib(data.n_users) > max_dense_gib)
+        if want_lazy:
+            return LazySimilarity(data, metric, cache_rows=cache_rows)
     if callable(metric):
         s = np.asarray(metric(data), dtype=float)
     elif not isinstance(metric, str):
@@ -76,14 +194,15 @@ def _similarity_among(data: Dataset, user_ids, metric) -> np.ndarray:
     if not isinstance(metric, str):                                  # callable / precomputed
         S = similarity_matrix(data, metric)[np.ix_(idx, idx)]
     elif metric == "jaccard":
-        b = (data.user_item_matrix(value="binary") > 0)[idx].astype(float)
+        # Densify only the members' own rows -- (len(idx), n_items), not (n_users, n_items).
+        b = (data.user_item_csr(value="binary")[idx].toarray() > 0).astype(float)
         inter = b @ b.T
         sizes = b.sum(1)
         union = sizes[:, None] + sizes[None, :] - inter
         with np.errstate(divide="ignore", invalid="ignore"):
             S = np.where(union > 0, inter / union, np.nan)
     elif metric in ("pearson", "cosine"):
-        m = data.user_item_matrix(value="rating")[idx]
+        m = data.user_item_csr(value="rating")[idx].toarray()
         if metric == "pearson":
             with np.errstate(invalid="ignore"):
                 S = np.corrcoef(m)
@@ -184,6 +303,9 @@ def synthetic(
     sim_high: float = 0.3,
     sim_low: float = 0.1,
     max_tries: int = 1000,
+    lazy: str | bool = "auto",
+    max_dense_gib: float = 2.0,
+    cache_rows: int = 512,
 ) -> Groups:
     """Generate up to ``n`` synthetic groups of ``size`` members.
 
@@ -200,7 +322,8 @@ def synthetic(
                    for _ in range(n)]
         return Groups(members, metadata=_meta(kind_name, size, n, metric, seed, sim_high, sim_low))
 
-    sim = similarity_matrix(data, metric)
+    sim = similarity_matrix(data, metric, lazy=lazy, max_dense_gib=max_dense_gib,
+                            cache_rows=cache_rows)
     high = lambda row: row >= sim_high  # noqa: E731
     low = lambda row: row <= sim_low    # noqa: E731
 

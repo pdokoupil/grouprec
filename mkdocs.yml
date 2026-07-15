@@ -23,6 +23,7 @@ nav:
   - Datasets & licensing: datasets.md
   - Evaluation & the rift: evaluation.md
   - Reproducibility: reproducibility.md
+  - Scaling (sparse & lazy similarity): scaling.md
   - Extending (algorithm/dataset/metric/group kind): extending.md
   - Integration (LensKit / RecBole / implicit): integration.md
   - Interactive inspector: INSPECTOR.md
