@@ -129,6 +129,11 @@ hostable) + an accumulating `LeaderboardStore`. A live Streamlit browser is in
 `examples/leaderboard_app.py` (`pip install grouprec[demo]`). Plot the
 relevance–fairness trade-off with `gr.bench.viz.plot_pareto(...)`.
 
+Explore a group recommendation end-to-end in the
+[**interactive inspector**](https://pdokoupil.github.io/grouprec/group_rec_inspector.html)
+— every ranking is a real `grouprec` call ([how it's built](https://pdokoupil.github.io/grouprec/INSPECTOR/);
+regenerate with `grouprec-build-inspector`, needs `[torch]`).
+
 `scripts/build_showcase.py` produces the headline two-panel board
 ([`docs/leaderboard.html`](docs/leaderboard.html), refreshed by CI): (A) deep models vs
 `EASE+GFAR`/`EASE+AVG` under coupled sampled HR/NDCG on CAMRa2011 + Mafengwo; (B)

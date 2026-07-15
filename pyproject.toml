@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "grouprec"
-version = "0.0.0"
+version = "0.0.1"
 description = "Group recommender systems for Python: results aggregation and profile aggregation as first-class citizens behind one API. Preference aggregation, group recommendation, fairness."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,6 +32,9 @@ Homepage = "https://github.com/pdokoupil/grouprec"
 Repository = "https://github.com/pdokoupil/grouprec"
 Documentation = "https://pdokoupil.github.io/grouprec"
 Issues = "https://github.com/pdokoupil/grouprec/issues"
+
+[project.scripts]
+grouprec-build-inspector = "grouprec.inspector.build:main"
 
 [project.optional-dependencies]
 torch = ["torch>=2.1"]

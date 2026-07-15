@@ -144,7 +144,7 @@ rec.recommend(members, k=5, candidates=cands)
 gim = GroupIM(groups, gints).fit(data)
 gim.group_scores(members, cands, member_weights=w)</pre>
   <p><b>This is the core part, not the whole script.</b> The full generator
-  (<code>scripts/build_inspector.py</code>, ~400 lines) wraps those calls with: parsing MovieLens
+  (<code>grouprec.inspector.build</code>, ~400 lines) wraps those calls with: parsing MovieLens
   <code>movies.csv</code> for titles/genres; candidate sampling; a Top-K sparse autoencoder for the
   latent concepts (adapted from an external repo — <em>not</em> part of grouprec); and baking a
   125-point member-weight grid into JSON. So the framework does the recommendation <em>and</em> the
@@ -215,7 +215,7 @@ gim.group_scores(members, cands, member_weights=w)</pre>
     <tr><td>Latent concepts (3)</td><td>SAE features with the highest <em>lift</em> over the member's items (member mean activation ÷ global mean, i.e. most distinctive)</td></tr>
     <tr><td>Concept exemplars (3)</td><td>items with highest activation for the feature</td></tr>
   </table>
-  <p style="margin-top:14px">Reproduce with <code>python scripts/build_inspector.py</code>. Full write-up:
+  <p style="margin-top:14px">Reproduce with <code>grouprec-build-inspector</code>. Full write-up:
   <code>docs/INSPECTOR.md</code> in the repository.</p>
 </div>
 

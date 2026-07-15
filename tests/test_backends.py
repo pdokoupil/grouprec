@@ -122,8 +122,6 @@ def test_lenskit_implicitmf_in_pipeline():
 # recbole adapter (experimental; only the friendly-error path without recbole)
 # --------------------------------------------------------------------------- #
 def test_recbole_friendly_error_when_missing():
-    if pytest.importorskip:  # placeholder to keep structure clear
-        pass
     try:
         import recbole  # noqa: F401
         pytest.skip("recbole installed; skipping missing-dependency test")

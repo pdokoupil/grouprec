@@ -23,10 +23,8 @@ dist/
 # docs build
 site/
 
-# internal-only paper draft (do not publish)
+# local-only files
 docs/demonstration.tex
-
-# internal working notes (local only — never publish)
 DELIVERED.md
 NEXT_STEPS.md
 PUBLICATION_PLAN.md
