@@ -3,7 +3,22 @@ site_description: Group recommender systems for Python — results & profile agg
 repo_url: https://github.com/pdokoupil/grouprec
 theme:
   name: material
-  features: [navigation.sections, content.code.copy, toc.integrate]
+  features: [navigation.sections, navigation.top, content.code.copy, toc.integrate]
+  palette:
+    - scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+extra_css:
+  - stylesheets/extra.css
 nav:
   - Home: index.md
   - Design (the rift): design.md
@@ -15,8 +30,11 @@ nav:
   - Integration (LensKit / RecBole / implicit): integration.md
   - Interactive inspector: INSPECTOR.md
   - Leaderboard: leaderboard.md
+  - Demo paper (RecSys 2026): papers/demo.md
 markdown_extensions:
   - admonition
+  - attr_list
+  - md_in_html
   - pymdownx.superfences
   - toc:
       permalink: true
