@@ -19,6 +19,8 @@ The **inspector** is the fastest way to understand what the library does: pick a
 group, move each member's influence slider, and watch the ranking change. *Every*
 number is a real `grouprec` call — aggregators through `GroupRecommender`, the deep
 model through `GroupIM.group_scores` — computed offline and baked into one page.
+It runs on the 20-core of MovieLens `ml-latest`: **204,257 users, 23,290 items,
+32.2M ratings**.
 
 <iframe class="inspector-embed" src="group_rec_inspector.html" title="grouprec interactive inspector" loading="lazy"></iframe>
 
@@ -78,7 +80,7 @@ print(report.pivot())
 Regenerate the inspector yourself (needs the `[torch]` extra):
 
 ```bash
-grouprec-build-inspector --out group_rec_inspector.html
+grouprec-build-inspector --dataset ml-latest --kcore 20 --out group_rec_inspector.html
 ```
 
 ## Backed by research

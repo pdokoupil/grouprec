@@ -78,6 +78,7 @@ from grouprec.models import GroupIM
 from grouprec.aggregators import WeightedAverageAggregator, EPFuzzDAAggregator
 from grouprec.aggregators._normalize import normalize_mgains
 from grouprec.datasets.cache import dataset_dir
+from grouprec.datasets.preprocess import k_core
 
 DATASET = "ml-latest-small"   # redistribution-permitting MovieLens release (titles can be published)
 
@@ -127,10 +128,10 @@ def _norm_combo(levels):
 # --------------------------------------------------------------------------- #
 # MovieLens metadata
 # --------------------------------------------------------------------------- #
-def load_movielens_metadata():
+def load_movielens_metadata(dataset: str = DATASET):
     """Parse the ml-latest-small ``movies.csv`` (movieId, title, pipe-separated genres).
     Located via the framework cache so it honors GROUPREC_CACHE and the pinned snapshot."""
-    mv = next(dataset_dir(DATASET).rglob("movies.csv"))
+    mv = next(dataset_dir(dataset).rglob("movies.csv"))
     titles, gsets, vocab = {}, {}, []
     with open(mv, encoding="utf-8") as f:
         reader = csv.reader(f)
@@ -249,9 +250,17 @@ def build_agg_order_grid(rec, members, cand, agg_factory):
 # --------------------------------------------------------------------------- #
 # main build
 # --------------------------------------------------------------------------- #
-def build(out: Path) -> None:
-    data = gr.datasets.load(DATASET)                 # downloads+extracts (pinned snapshot)
-    genres, titles, genre_vecs = load_movielens_metadata()
+def build(out: Path, dataset: str = DATASET, kcore: int = 0) -> None:
+    data = gr.datasets.load(dataset)                 # downloads+extracts (pinned snapshot)
+    if kcore:
+        # A framework call, not bespoke glue: iteratively drop users AND items with
+        # fewer than `kcore` interactions. On the full ml-latest this is what brings the
+        # item space (and so EASE's n_items x n_items Gram) back into memory.
+        before = (data.n_users, data.n_items, len(data.interactions))
+        data = k_core(data, k=kcore)
+        print(f"k_core(k={kcore}): {before[0]:,}u/{before[1]:,}i/{before[2]:,}r -> "
+              f"{data.n_users:,}u/{data.n_items:,}i/{len(data.interactions):,}r")
+    genres, titles, genre_vecs = load_movielens_metadata(dataset)
     ui, ii = data.user_index, data.item_index
     items_arr = data.items
     inter = data.interactions
@@ -388,7 +397,11 @@ def build(out: Path) -> None:
         print(f"  [group {gslot + 1}/{len(chosen)}] {kind} users={mset} coh={cohesions[gslot]:.2f} consensus={len(cons)}")
 
     payload = {
-        "dataset": "MovieLens latest-small",
+        "dataset": dataset_label(dataset, kcore),
+        "datasetName": dataset,
+        "kcore": kcore,
+        "stats": {"users": int(data.n_users), "items": int(data.n_items),
+                  "ratings": int(len(data.interactions))},
         "algorithms": ALGORITHMS, "scoreKeys": SCORE_KEYS, "orderKeys": ORDER_KEYS, "e2eKeys": E2E_KEYS,
         "gridLevels": GRID_LEVELS,
         "titles": {str(it): titles.get(it, f"Item {it}")
@@ -403,8 +416,31 @@ def build(out: Path) -> None:
     print(f"\nwrote {out}  ({len(groups_out)} groups, {len(ALGORITHMS)} algorithms, {out.stat().st_size/1e6:.2f} MB)")
 
 
+_ML_PRETTY = {"ml-latest-small": "latest-small", "ml-latest": "latest",
+              "ml-25m": "25M", "ml-32m": "32M", "ml-1m": "1M", "ml-100k": "100K"}
+
+
+def dataset_label(dataset: str, kcore: int = 0) -> str:
+    """Human label for the dataset actually used, e.g. 'MovieLens latest (20-core)'."""
+    pretty = _ML_PRETTY.get(dataset, dataset)
+    base = f"MovieLens {pretty}" if dataset.startswith("ml-") else dataset
+    return f"{base} ({kcore}-core)" if kcore else base
+
+
 def render_html(payload: dict) -> str:
-    return _HTML_TEMPLATE.replace("/*__DATA__*/", json.dumps(payload, separators=(",", ":")))
+    label = payload["dataset"]
+    st = payload.get("stats", {})
+    scale = (f"{st['users']:,} users · {st['items']:,} items · {st['ratings']:,} ratings"
+             if st else "")
+    # The footer already prints a linked "MovieLens", so it takes the suffix only
+    # ("latest (20-core)") -- otherwise it reads "MovieLens MovieLens latest (20-core)".
+    suffix = label[len("MovieLens "):] if label.startswith("MovieLens ") else label
+    return (_HTML_TEMPLATE
+            .replace("__DATASET_SUFFIX__", suffix)
+            .replace("__DATASET_LABEL__", label)
+            .replace("__DATASET_NAME__", payload.get("datasetName", DATASET))
+            .replace("__SCALE__", scale)
+            .replace("/*__DATA__*/", json.dumps(payload, separators=(",", ":"))))
 
 
 _HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -412,7 +448,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Group Recommendation Inspector — MovieLens (latest-small)</title>
+<title>Group Recommendation Inspector — __DATASET_LABEL__</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   :root{--bg:#f8f7f3;--surface:#fff;--surface1:#f1efe8;--border:rgba(0,0,0,.12);
@@ -484,7 +520,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body>
 <h1>Group recommendation inspector</h1>
-<p class="subtitle">Real MovieLens (latest-small) · groups from <code>gr.groups.synthetic</code> (similar / divergent / outlier) with consensus-derived interactions · each slider sets a member's <b>relative importance</b> in 5 discrete steps (each a precomputed output); the % shown is the resulting <b>share</b>, so it depends on the other members</p>
+<p class="subtitle">Real __DATASET_LABEL__ · __SCALE__ · groups from <code>gr.groups.synthetic</code> (similar / divergent / outlier) with consensus-derived interactions · each slider sets a member's <b>relative importance</b> in 5 discrete steps (each a precomputed output); the % shown is the resulting <b>share</b>, so it depends on the other members</p>
 
 <div class="viewtabs">
   <button class="tab-btn active" id="vt-inspector" onclick="setView('inspector')">Inspector</button>
@@ -540,7 +576,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   <p>Every <em>ranking</em> you see is produced by a real <code>grouprec</code> call — the
   aggregators through <code>GroupRecommender</code>, the deep model through
   <code>GroupIM.group_scores</code> (both steered by the per-member weights):</p>
-  <pre>data   = gr.datasets.load("ml-latest-small")
+  <pre>data   = gr.datasets.load("__DATASET_NAME__")
 groups = gr.groups.synthetic(data, kind="divergent", size=3, n=3)
 gints  = gr.groups.derive_group_interactions(data, groups)   # per-group signal (majority, overridable)
 ease   = EASE(reg=200.0).fit(data)
@@ -631,7 +667,7 @@ gim.group_scores(members, cands, member_weights=w)</pre>
 <div class="tip" id="tip"></div>
 <p style="font-size:11px;color:var(--text-muted);margin-top:20px;line-height:1.5">
   Built with <b>grouprec</b>. Data: the <a href="https://grouplens.org/datasets/movielens/" style="color:var(--accent)">MovieLens</a>
-  latest-small dataset (F. Maxwell Harper and Joseph A. Konstan. 2015. The MovieLens Datasets. ACM TiiS),
+  __DATASET_SUFFIX__ dataset (F. Maxwell Harper and Joseph A. Konstan. 2015. The MovieLens Datasets. ACM TiiS),
   courtesy of GroupLens, used under its usage license (redistribution permitted under the same terms).
 </p>
 
@@ -819,8 +855,12 @@ initControls(); resetWeights();
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--out", default="docs/group_rec_inspector.html")
+    p.add_argument("--dataset", default=DATASET,
+                   help="registered dataset name (e.g. ml-latest-small, ml-latest, ml-25m)")
+    p.add_argument("--kcore", type=int, default=0,
+                   help="iterative k-core on users AND items before building (0 = off)")
     a = p.parse_args()
-    build(Path(a.out))
+    build(Path(a.out), dataset=a.dataset, kcore=a.kcore)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,8 @@ from grouprec.aggregators._normalize import normalize_mgains
 from grouprec.models import GroupIM
 
 # 1. dataset processing (download + parse + vocab) — one call
-data = gr.datasets.load("ml-latest-small")   # redistribution-permitting MovieLens release
+data = gr.datasets.load("ml-latest")         # redistribution-permitting MovieLens release
+data = k_core(data, k=20)                    # 331k->204k users, 83k->23k items (framework call)
 
 # 2. synthetic group generation — random / similar / divergent / outlier, size K
 similar   = gr.groups.synthetic(data, kind="similar",   size=3, n=3, seed=0)
@@ -56,6 +57,10 @@ group-interaction derivation; the script does data prep, the SAE explanation lay
 
 ## Groups
 
+* Built on the **20-core of MovieLens `ml-latest`** (204,257 users / 23,290 items / 32.2M
+  ratings). The k-core is a framework call (`grouprec.datasets.preprocess.k_core`) and is what
+  brings EASE's `n_items x n_items` Gram back into memory; the *user* count needs no reduction
+  because group sampling now goes through the lazy similarity (see `docs/scaling.md`).
 * Membership is produced by `gr.groups.synthetic` in three regimes — **similar**,
   **divergent**, **outlier** — three groups each (nine total). Each is tagged with its
   regime and the measured mean pairwise rating correlation `r`.
@@ -128,7 +133,7 @@ construction, the most common genres). The `encoder.user_predictor` head is **pr
 all users**, so it carries actual taste structure. Independently, selecting a member's
 concepts by raw mean activation returns whatever is globally strongest, so we select by
 **lift** (the member's mean activation ÷ the global mean), i.e. what is *distinctive* about
-that member. Together these took the demo from 3 to 17 distinct concept sets over 27 members
+that member. Together these took the demo from 3 to 16 distinct concept sets over 27 members
 — members of *similar* groups still share concepts (as they should), while *divergent*
 groups' members visibly differ.
 

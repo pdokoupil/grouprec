@@ -48,6 +48,10 @@ def movielens_latest_small(root: Path) -> Dataset:
     return _movielens_csv(root, "ml-latest-small")
 
 
+def movielens_latest(root: Path) -> Dataset:
+    return _movielens_csv(root, "ml-latest")
+
+
 def movielens_25m(root: Path) -> Dataset:
     return _movielens_csv(root, "ml-25m")
 

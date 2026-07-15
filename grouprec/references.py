@@ -114,7 +114,8 @@ _AGG_KEYS: dict[str, str] = {
 # dataset name (lower-cased) -> citation key
 _DATASET_KEYS: dict[str, str] = {
     "ml-100k": "movielens", "ml-1m": "movielens", "ml-25m": "movielens",
-    "ml-32m": "movielens", "ml-latest-small": "movielens", "kgrec": "kgrec", "lastfm": "lastfm",
+    "ml-32m": "movielens", "ml-latest-small": "movielens", "ml-latest": "movielens",
+    "kgrec": "kgrec", "lastfm": "lastfm",
     "lastfm-tasteprofile": "lastfm", "weeplaces": "weeplaces", "mafengwo": "mafengwo",
     "camra2011": "camra2011", "yelp": "yelp", "douban": "douban",
 }

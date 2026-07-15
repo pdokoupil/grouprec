@@ -103,7 +103,7 @@ gd   = gr.datasets.load_yin(gr.datasets.fetch_yin(accept_license=True), "yelp")
 
 | Policy | Datasets | Behavior |
 |---|---|---|
-| `auto` | MovieLens 100K/1M/25M/32M/latest-small | fetched for your own use (GroupLens permits research download; *redistribution* terms differ by release — 100K/1M forbid it, 25M/latest allow it under same terms) |
+| `auto` | MovieLens 100K/1M/25M/32M/latest/latest-small | fetched for your own use (GroupLens permits research download; *redistribution* terms differ by release — 100K/1M forbid it, 25M/latest allow it under same terms) |
 | `auto_nc` | KGRec, Last.fm, Yelp-LA, Douban-SH | non-commercial — fetched only after `accept_license=True`, citations surfaced |
 | `manual` | CAMRa2011, Mafengwo, Weeplaces | redistribution unclear — `load` prints where to download |
 
@@ -124,8 +124,10 @@ res.leaderboard("ndcg", k=10, protocol="coupled")     # ranking flips vs "decoup
 
 Explore a group recommendation end-to-end in the
 [**interactive inspector**](https://pdokoupil.github.io/grouprec/group_rec_inspector.html)
-— every ranking is a real `grouprec` call ([how it's built](https://pdokoupil.github.io/grouprec/INSPECTOR/);
-regenerate with `grouprec-build-inspector`, needs `[torch]`).
+— built on the 20-core of MovieLens `ml-latest` (204,257 users / 23,290 items / 32.2M
+ratings); every ranking is a real `grouprec` call
+([how it's built](https://pdokoupil.github.io/grouprec/INSPECTOR/); regenerate with
+`grouprec-build-inspector --dataset ml-latest --kcore 20`, needs `[torch]`).
 
 ## What's inside
 

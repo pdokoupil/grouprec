@@ -215,6 +215,22 @@ register(DatasetSpec(
           "Redistribution-permitting license, so titles may be baked into the published demo.",
 ))
 register(DatasetSpec(
+    # The FULL rolling 'latest' release (~330k users / 83k items / 33.8M ratings).
+    # Same caveat as latest-small and then some: GroupLens calls it a *development*
+    # dataset and says it is "not an appropriate dataset for shared research results"
+    # -- prefer ml-25m/ml-32m for anything you report. Pinned by sha256 so a re-pointed
+    # release is caught rather than silently used.
+    name="ml-latest", scenario=1, policy="auto", license=_ML_LICENSE_REDIST,
+    citation="Harper & Konstan 2015, The MovieLens Datasets, ACM TiiS",
+    homepage="https://grouplens.org/datasets/movielens/latest/",
+    urls=[f"{_ML}/ml-latest.zip"], loader=loaders.movielens_latest,
+    checksum="66a9e518c747d76b241d9a859b001a2619d3ed1672ceef599eb50daf73a7b4a3",
+    notes="Rolling 'latest' release; pinned by sha256 (retrieved 2026-07-15; the "
+          "snapshot's own README is dated 2023-07-20). Development dataset -- NOT for "
+          "reporting research results; use ml-25m/ml-32m for benchmarks. "
+          "Redistribution-permitting license, so titles may be baked into a demo.",
+))
+register(DatasetSpec(
     name="ml-25m", scenario=1, policy="auto", license=_ML_LICENSE_REDIST,
     citation="Harper & Konstan 2015, The MovieLens Datasets, ACM TiiS",
     homepage="https://grouplens.org/datasets/movielens/25m/",
