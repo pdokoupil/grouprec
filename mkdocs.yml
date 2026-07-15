@@ -5,15 +5,12 @@ theme:
   name: material
   features: [navigation.sections, navigation.top, content.code.copy, toc.integrate]
   palette:
+    # colors are driven by docs/stylesheets/extra.css (shared with the inspector)
     - scheme: default
-      primary: teal
-      accent: teal
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - scheme: slate
-      primary: teal
-      accent: teal
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
