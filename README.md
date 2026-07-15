@@ -88,13 +88,8 @@ model.recommend(gd.groups[0], k=10)          # paradigm="profile" -> coupled gro
 Model zoo: **`NCFGroup`**, **`AGREE`**, **`GroupIM`** (InfoMax SSL), **`ConsRec`**
 (overlap/hypergraph/LightGCN consensus), **`HyperGroup`** (HGNN), **`AlignGroup`**
 (InfoNCE member/group alignment) — each reviewed against its original repo. They plug
-into `benchmark(..., level="sampled")` and share the **same coupled leaderboard** as
-results-aggregators. Reproduced on CAMRa2011 (HR@5): GroupIM 0.62, ConsRec 0.62,
-AGREE/AlignGroup/HyperGroup ~0.59, EASE+GFAR 0.58.
-
-There's also a **profile-first** path (`ProfileGroupRecommender`):
-*aggregate-then-recommend* — merge member profiles (`average`/`union`/`sum`) into a
-pseudo-user, query the base RS once.
+into `benchmark(..., level="sampled")` and share the same coupled protocol as
+results-aggregators, so both families compare side by side.
 
 ## Datasets (license-aware)
 
@@ -116,7 +111,10 @@ gd   = gr.datasets.load_yin(gr.datasets.fetch_yin(accept_license=True), "yelp")
 The library does not bundle dataset files; for datasets with access restrictions or non-commercial terms, loading is enabled only when the user accepts the dataset-specific license or follows the upstream download instructions. Plus
 `from_huggingface(...)` / `from_path(...)` for anything else.
 
-## Benchmark, leaderboard & the rift
+## Benchmark & the rift
+
+Score the *same* recommender under **coupled** vs **decoupled** and put both families
+on one board:
 
 ```python
 res = gr.benchmark(recs, tasks, protocols=["coupled", "decoupled"], metrics=["ndcg@10"])
@@ -124,21 +122,10 @@ res.to_csv("leaderboard.csv")                # tidy long-format
 res.leaderboard("ndcg", k=10, protocol="coupled")     # ranking flips vs "decoupled"
 ```
 
-`scripts/run_leaderboard.py` regenerates a CSV + a static HTML page (GitHub-Pages
-hostable) + an accumulating `LeaderboardStore`. A live Streamlit browser is in
-`examples/leaderboard_app.py` (`pip install grouprec[demo]`). Plot the
-relevance–fairness trade-off with `gr.bench.viz.plot_pareto(...)`.
-
 Explore a group recommendation end-to-end in the
 [**interactive inspector**](https://pdokoupil.github.io/grouprec/group_rec_inspector.html)
 — every ranking is a real `grouprec` call ([how it's built](https://pdokoupil.github.io/grouprec/INSPECTOR/);
 regenerate with `grouprec-build-inspector`, needs `[torch]`).
-
-`scripts/build_showcase.py` produces the headline two-panel board
-([`docs/leaderboard.html`](docs/leaderboard.html), refreshed by CI): (A) deep models vs
-`EASE+GFAR`/`EASE+AVG` under coupled sampled HR/NDCG on CAMRa2011 + Mafengwo; (B)
-aggregators decoupled on MovieLens, where **LTP/RLProp lead the fairness–utility
-trade-off** (`ndcg.min` 0.27 vs AVG 0.22; AVG wins raw utility).
 
 ## What's inside
 
@@ -146,10 +133,9 @@ trade-off** (`ndcg.min` 0.27 vs AVG 0.22; AVG wins raw utility).
   `GFAR GreedyLM PAR SPGreedy EPFuzzDA` (fairness), `RLProp LTP PeriodicFAI
   EPFuzzDAWeighted SDAA SIAA` (sequential).
 - **Group formation**: `gr.groups.synthetic(kind="random|similar|divergent|outlier")`.
-- **Evaluation**: `coupled` / `decoupled` / `sampled` protocols; metrics at three
-  levels — per-member (`ndcg/recall/hr/ar/…` × `mean/min/minmax/jain/zero`), per-list
-  (`novelty`, `list_coverage`, `register_list_metric`), per-run (carbon via
-  `gr.track_emissions`). Long-term fairness: `dMAE`, `groupSatO`, `groupDisO`.
+- **Evaluation**: `coupled` / `decoupled` / `sampled` protocols; metrics at the
+  per-member (`ndcg/recall/hr/ar/…` × `mean/min/minmax/jain/zero`) and per-list
+  (`novelty`, `list_coverage`, `register_list_metric`) levels.
 - **Reproducibility**: `gr.Experiment` (seed + env + git SHA/dirty/diff + citations),
   `gr.set_seed`, `gr.cite("ConsRec")`.
 
@@ -160,7 +146,6 @@ gr.cite("ConsRec")                            # BibTeX for any implemented metho
 gr.collect_citations(rec, dataset)            # auto-collect cites for what a run used
 with gr.Experiment("run1", seed=42, cite=[rec, dataset]) as exp:  # cites auto-resolved
     ...                                       # writes runs/run1-<ts>/ on exit
-with gr.track_emissions() as em: ...          # carbon cost of a run
 gr.eval.register_metric("coverage", fn)       # custom per-member metric
 gr.eval.register_list_metric("ild", fn)       # custom per-list metric
 ```
