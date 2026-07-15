@@ -47,6 +47,59 @@ Honest notes:
 * SAE concepts: a Top-K SAE (adapted from umap2026, external to grouprec) on GroupIM's item
   embeddings, labelled by genre. This is an *explanation* layer, not a grouprec component.
 
+--------------------------------------------------------------------------------------
+EXTENDING THIS SCRIPT
+--------------------------------------------------------------------------------------
+Adding an algorithm
+  1. Append an entry to ``ALGORITHMS``:
+       key      -- must match the key you store the grid under, below
+       family   -- "AGG" (results aggregation) or "E2E" (representation learning); drives the badge
+       mode     -- "score" if the method exposes a per-item group score (an aggregator with
+                   ``score_items``, or a deep model), "order" if it only returns a ranking
+                   (selection-based aggregators: EP-FuzzDA, GFAR, FAI, the greedy/sequential family)
+       weighted -- True only if the method actually defines per-member weights (below)
+  2. Build its grid in ``build()`` with the matching generic builder and store it under that key:
+       score-reduction aggregator -> ``build_agg_score_grid(rec, mset, cand, factory, weighted=...)``
+                                     into ``score_grid``
+       selection-based aggregator -> ``build_agg_order_grid(rec, mset, cand, factory, weighted=...)``
+                                     into ``order_grid``
+       member-pooling deep model  -> ``build_groupim_grid(model, mset, cand, weighted=...)``
+                                     into ``score_grid`` (+ ``attGrid`` for the attribution dots)
+  That is ~3 lines; the UI needs no change.
+
+  REQUIREMENT -- member weights. The influence sliders are only meaningful for methods that
+  take per-member weights. In grouprec that is exactly: aggregators whose constructor accepts
+  ``member_weights`` (currently wAVG, EP-FuzzDA, LTP -- 3 of 20) and deep models with
+  ``supports_member_weights = True`` (GroupIM, AGREE, NCFGroup; the transductive ConsRec /
+  AlignGroup / HyperGroup are False and *raise* if given weights, because a group-id graph node
+  has no member pooling to steer). For anything else set ``weighted=False``: only the uniform
+  point is precomputed and the UI disables that method's sliders instead of implying an effect
+  it cannot have. Do NOT wire a weight-agnostic method with ``weighted=True`` -- all 5^M grid
+  points would be identical and the slider would silently do nothing.
+
+Adding a dataset
+  ``build(dataset=..., kcore=...)`` already takes any registered dataset (``gr.datasets.list()``).
+  To be a good fit it must satisfy:
+    * item TITLES and item CATEGORIES/tags -- titles keep the recommendations readable, and the
+      SAE concepts are named by the dominant category of a feature's top items. Without both,
+      items degrade to "Item 1234" and the concepts panel loses its meaning. This is why the
+      ID-only group benchmarks (CAMRa2011, Mafengwo, Yelp/Douban) are a poor fit despite having
+      *real* groups -- and why we use MovieLens with synthetic groups instead.
+    * a REDISTRIBUTION-PERMITTING license -- the metadata is baked into a published page, which
+      rules out ml-100k / ml-1m (see the registry's license policies).
+    * RATINGS, if you keep the default consensus rule (``like = rating >= LIKE``).
+    * a tractable item count -- EASE inverts an ``n_items x n_items`` Gram matrix. Use ``--kcore``
+      to bring a large release (e.g. full ml-latest) back into range.
+  A non-MovieLens dataset additionally needs its own metadata parser returning
+  ``(categories, titles, category_vectors)`` in place of ``load_movielens_metadata``.
+
+Known constraints
+  * group size is effectively 3: ``MEMBER_STYLE`` defines exactly 3 member colours.
+  * the grid is ``len(GRID_LEVELS)^GROUP_SIZE`` per group per weighted method (5^3 = 125), so it
+    grows exponentially with group size.
+  * the SAE needs *some* item embedding; it currently reads GroupIM's encoder head, so dropping
+    GroupIM entirely means pointing ``item_emb`` at another source (e.g. EASE's item weights).
+
 Usage (requires the ``[torch]`` extra):
     grouprec-build-inspector --out group_rec_inspector.html   # installed console script
     python -m grouprec.inspector.build --out ...              # or run as a module
@@ -112,6 +165,26 @@ ALGORITHMS = [
 SCORE_KEYS = [a["key"] for a in ALGORITHMS if a["mode"] == "score"]      # bar = 0..1 score
 ORDER_KEYS = [a["key"] for a in ALGORITHMS if a["mode"] == "order"]      # bar = rank
 E2E_KEYS = [a["key"] for a in ALGORITHMS if a["family"] == "E2E"]
+# Methods that define per-member weights at all (see "Adding an algorithm" above). Anything
+# with weighted=False precomputes a single uniform output instead of the 5^M grid, and the UI
+# disables its sliders rather than letting them imply an effect the method cannot have.
+WEIGHTED_KEYS = [a["key"] for a in ALGORITHMS if a.get("weighted", True)]
+
+
+def _eq_combo(n_members: int) -> tuple:
+    """The 'all members equal' grid combo (the level nearest 0.5) -- the single point we
+    precompute for weight-agnostic methods, and the key the UI already falls back to."""
+    eq = min(range(len(GRID_LEVELS)), key=lambda i: abs(GRID_LEVELS[i] - 0.5))
+    return tuple([eq] * n_members)
+
+
+def _combos(n_members: int, weighted: bool):
+    """Grid combos to precompute: the full 5^M grid for weight-aware methods, or just the
+    uniform point for weight-agnostic ones -- whose output cannot depend on the weights, so
+    computing (and shipping) 5^M identical copies would be waste."""
+    if weighted:
+        return itertools.product(range(len(GRID_LEVELS)), repeat=n_members)
+    return [_eq_combo(n_members)]
 
 
 def _minmax(v: np.ndarray) -> np.ndarray:
@@ -205,42 +278,48 @@ def fit_topk_sae(item_emb, *, hidden=SAE_HIDDEN, k=SAE_K, steps=SAE_STEPS, seed=
 # --------------------------------------------------------------------------- #
 # Real framework calls over the per-member influence grid
 # --------------------------------------------------------------------------- #
-def build_groupim_grid(model, members, cand):
-    """GroupIM scores + per-combo pooling attention over the weight grid via
-    ``GroupIM.group_scores(members, cand, member_weights=w, return_attention=True)``.
-    Collecting attention per combo (not just at uniform weights) lets the UI derive
-    attribution that is consistent with which grid point's items are being shown."""
+def build_groupim_grid(model, members, cand, weighted=True):
+    """Deep-model scores + per-combo pooling attention over the weight grid via
+    ``group_scores(members, cand, member_weights=w, return_attention=True)``. Despite the
+    name this works for any member-pooling model (``supports_member_weights = True``:
+    GroupIM, AGREE, NCFGroup) -- it only uses that uniform API. Collecting attention per
+    combo (not just at uniform weights) lets the UI derive attribution that is consistent
+    with which grid point's items are being shown. Pass ``weighted=False`` for a model whose
+    pooling cannot be steered (the transductive ones), and only the uniform point is built."""
     grid, att_grid, M = {}, {}, len(members)
-    for combo in itertools.product(range(len(GRID_LEVELS)), repeat=M):
+    for combo in _combos(M, weighted):
         key = "".join(str(c) for c in combo)
-        w = list(_norm_combo([GRID_LEVELS[c] for c in combo]))
+        w = list(_norm_combo([GRID_LEVELS[c] for c in combo])) if weighted else None
         s, att = model.group_scores(members, cand, member_weights=w, return_attention=True)
         grid[key] = [round(float(x), 4) for x in _minmax(np.asarray(s, dtype=float))]
         att_grid[key] = [round(float(x), 4) for x in att]
     return grid, att_grid
 
 
-def build_agg_score_grid(rec, members, cand, agg_factory):
+def build_agg_score_grid(rec, members, cand, agg_factory, weighted=True):
     """Per-item group scores from the real ``GroupRecommender.group_scores`` over the weight
     grid (for score-reduction aggregators like wAVG, which expose ``score_items``). Returns
-    combo -> [minmax 0-1 scores], so the UI can show an actual group rating, not just a rank."""
+    combo -> [minmax 0-1 scores], so the UI can show an actual group rating, not just a rank.
+    ``weighted=False`` (an aggregator that ignores member weights, e.g. least-misery) builds
+    only the uniform point; ``agg_factory`` is then called with ``None``."""
     grid, M = {}, len(members)
-    for combo in itertools.product(range(len(GRID_LEVELS)), repeat=M):
-        w = _norm_combo([GRID_LEVELS[c] for c in combo])
+    for combo in _combos(M, weighted):
+        w = _norm_combo([GRID_LEVELS[c] for c in combo]) if weighted else None
         rec.aggregator = agg_factory(w)
         s = np.asarray(rec.group_scores(members, items=cand), dtype=float)
         grid["".join(str(c) for c in combo)] = [round(float(x), 4) for x in _minmax(s)]
     return grid
 
 
-def build_agg_order_grid(rec, members, cand, agg_factory):
+def build_agg_order_grid(rec, members, cand, agg_factory, weighted=True):
     """Candidate ordering from the real ``GroupRecommender`` pipeline over the weight grid
     (for selection-based aggregators like EP-FuzzDA, which return an ordering, not scores).
-    ``rec`` carries a pre-fitted base; we only swap in the aggregator per combo."""
+    ``rec`` carries a pre-fitted base; we only swap in the aggregator per combo. See
+    :func:`build_agg_score_grid` for ``weighted=False``."""
     pos = {c: i for i, c in enumerate(cand)}
     grid, M = {}, len(members)
-    for combo in itertools.product(range(len(GRID_LEVELS)), repeat=M):
-        w = _norm_combo([GRID_LEVELS[c] for c in combo])
+    for combo in _combos(M, weighted):
+        w = _norm_combo([GRID_LEVELS[c] for c in combo]) if weighted else None
         rec.aggregator = agg_factory(w)
         order_ids = rec.recommend(members, k=len(cand), candidates=cand)
         grid["".join(str(c) for c in combo)] = [pos[int(x)] for x in order_ids]
@@ -403,6 +482,7 @@ def build(out: Path, dataset: str = DATASET, kcore: int = 0) -> None:
         "stats": {"users": int(data.n_users), "items": int(data.n_items),
                   "ratings": int(len(data.interactions))},
         "algorithms": ALGORITHMS, "scoreKeys": SCORE_KEYS, "orderKeys": ORDER_KEYS, "e2eKeys": E2E_KEYS,
+        "weightedKeys": WEIGHTED_KEYS,
         "gridLevels": GRID_LEVELS,
         "titles": {str(it): titles.get(it, f"Item {it}")
                    for g in groups_out
@@ -686,6 +766,9 @@ function group(){ return DATA.groups[groupIdx]; }
 function fam(){ return algo().family; }
 function isE2E(){ return fam() === 'E2E'; }
 function isOrder(){ return ORDERK.indexOf(algoKey) >= 0; }
+// Does the selected method define per-member weights? If not, its grid holds only the
+// uniform point, so the sliders are disabled rather than appearing to do something.
+function isWeighted(){ return (DATA.weightedKeys || ALGOS.map(a=>a.key)).indexOf(algoKey) >= 0; }
 function title(id){ return TITLES[id] || ('Item ' + id); }
 function comboKey(){ return weights.map(w=>{let bi=0,bd=9;LEVELS.forEach((L,i)=>{const d=Math.abs(L-w);if(d<bd){bd=d;bi=i;}});return bi;}).join(''); }
 function eqKey(){ return group().members.map(()=>{let bi=0,bd=9;LEVELS.forEach((L,i)=>{const d=Math.abs(L-0.5);if(d<bd){bd=d;bi=i;}});return bi;}).join(''); }
@@ -745,7 +828,9 @@ function renderControls(){
   b.className='badge '+a.family; b.textContent=a.family;
   document.getElementById('algo-desc').textContent=a.desc;
   document.getElementById('coh-badge').textContent=`members: ${group().kind} (r=${group().cohesion})`;
-  document.getElementById('method-note').textContent = isE2E()
+  document.getElementById('method-note').textContent = !isWeighted()
+    ? "This method does not define per-member weights, so the influence sliders are disabled and every member counts equally. Only methods that take member weights (wAVG, EP-FuzzDA, and the member-pooling deep models) can be steered."
+    : isE2E()
     ? "GroupIM (deep): the influence weight is injected into the model's own attention aggregator and precomputed on a grid — NOT SAE steering. Each step is a real forward pass; equal weights = the native model."
     : "Aggregation: the influence weight is each member's importance. Weighted-average = grouprec WeightedAverageAggregator; EP-FuzzDA is the real fairness aggregator run with these member weights. (Weight-agnostic rules like least-misery are excluded — they ignore weights.)";
   document.getElementById('cand-n').textContent=group().candidates.length;
@@ -760,16 +845,19 @@ function renderControls(){
 // weights the displayed ranking was actually computed with.
 function updateWeightLabels(){ const wn=effectiveWeights(); group().members.forEach((u,i)=>{const el=document.getElementById('wlab-'+i); if(el) el.textContent=Math.round(wn[i]*100)+'%';}); }
 function renderUsers(){
-  const g=group(), wn=effectiveWeights();
+  const g=group(), wn=effectiveWeights(), wOK=isWeighted();
+  const sTip = wOK
+    ? `Snaps to the ${LEVELS.length} precomputed levels (${LEVELS.join(', ')}) -- every position is a real, precomputed output`
+    : `${algo().name} does not define per-member weights, so this slider is disabled`;
   document.getElementById('users-container').innerHTML=g.members.map((u,i)=>`
     <div class="user-card"><div class="user-header">
       <div class="avatar" style="background:${u.bg};color:${u.color}">${u.initials}</div>
       <div><div style="font-size:13px;font-weight:500">${u.label}</div>
            <div style="font-size:11px;color:var(--text-muted)">top: ${u.history.map(title).join(' · ')||'—'}</div></div>
-      <div style="margin-left:auto;font-size:12px;color:var(--text-sec)" id="wlab-${i}">${Math.round(wn[i]*100)}%</div>
-    </div><div class="slider-row"><span style="font-size:11px;color:var(--text-muted)">influence</span>
+      <div style="margin-left:auto;font-size:12px;color:var(--text-sec)" id="wlab-${i}">${wOK?Math.round(wn[i]*100)+'%':'—'}</div>
+    </div><div class="slider-row" style="${wOK?'':'opacity:.45'}"><span style="font-size:11px;color:var(--text-muted)">influence</span>
       <input type="range" min="0" max="100" value="${Math.round(weights[i]*100)}" step="${STEP}"
-        title="Snaps to the ${LEVELS.length} precomputed levels (${LEVELS.join(', ')}) -- every position is a real, precomputed output"
+        ${wOK?'':'disabled'} title="${sTip}"
         oninput="weights[${i}]=this.value/100;updateWeightLabels();renderRecs();renderChart()">
     </div></div>`).join('');
 }
