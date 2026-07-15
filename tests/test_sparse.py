@@ -5,10 +5,12 @@ number, only the memory bill.
 """
 
 import numpy as np
+import pandas as pd
 import pytest
 from scipy import sparse
 
 import grouprec as gr
+from grouprec.data import Dataset
 from grouprec.backends import EASE, ItemKNN
 from grouprec.groups import LazySimilarity, similarity_matrix, build_predicate_group
 
@@ -16,6 +18,23 @@ from grouprec.groups import LazySimilarity, similarity_matrix, build_predicate_g
 @pytest.fixture(scope="module")
 def data():
     return gr.make_blobs_dataset(n_users=120, n_items=90, seed=0)
+
+
+@pytest.fixture(scope="module")
+def generic_data():
+    """A dataset whose item-item similarities are generically distinct.
+
+    ``make_blobs_dataset`` is clustered to the point that every *binary* item column is
+    identical, so every cosine similarity is exactly 1.0. Any top-k over that is an
+    arbitrary choice among ~n_items ties, and a 1-ulp difference between two computation
+    paths (e.g. Accelerate vs OpenBLAS) silently selects different neighbours. Anything
+    that asserts on *which* neighbours were kept needs data without that degeneracy.
+    """
+    rng = np.random.default_rng(0)
+    n_users, n_items = 80, 40
+    rows = [(u, i, float(rng.integers(1, 6)))
+            for u in range(n_users) for i in range(n_items) if rng.random() < 0.3]
+    return Dataset(pd.DataFrame(rows, columns=["user", "item", "rating"]), name="generic")
 
 
 # --------------------------------------------------------------------------- #
@@ -62,17 +81,44 @@ def test_ease_score_matches_dense(data):
     np.testing.assert_allclose(fitted.score(users), expected, atol=1e-10)
 
 
-def test_itemknn_weights_match_dense_formulation(data):
-    fitted = ItemKNN(k=5).fit(data)
+def test_itemknn_similarities_match_dense_formulation(data):
+    """The similarity matrix itself, before top-k, must match the dense formulation.
+
+    Asserted on the blobs data *without* top-k: which of N tied neighbours survives
+    selection is arbitrary, but the similarities themselves are not.
+    """
+    fitted = ItemKNN(k=None).fit(data)
     X = data.user_item_matrix(value="binary")
     norm = np.linalg.norm(X, axis=0)
     Xn = X / np.where(norm > 0, norm, 1.0)
     S = Xn.T @ Xn
     np.fill_diagonal(S, 0.0)
-    keep = np.argsort(-S, axis=1)[:, :5]
-    mask = np.zeros_like(S, dtype=bool)
-    np.put_along_axis(mask, keep, True, axis=1)
-    np.testing.assert_allclose(np.asarray(fitted.W_), np.where(mask, S, 0.0), atol=1e-10)
+    np.testing.assert_allclose(np.asarray(fitted.W_), S, atol=1e-10)
+
+
+@pytest.mark.parametrize("fixture", ["data", "generic_data"])
+def test_itemknn_topk_keeps_the_k_largest_similarities(fixture, request):
+    """Top-k keeps the k largest similarities per row, matching the dense formulation.
+
+    Compared by the *values* kept rather than by which indices survived. When neighbours
+    tie at the k-th place, the choice between them is arbitrary: a 1-ulp difference
+    between two BLAS implementations picks the other one, so an index-based assertion is
+    not portable (it fails ~2/3 of the time under random ulp jitter, which is how this
+    surfaced on the Linux CI runners). The kept similarities are well-defined; the
+    identity of a tied winner is not.
+    """
+    dataset = request.getfixturevalue(fixture)
+    W = np.asarray(ItemKNN(k=5).fit(dataset).W_)
+    X = dataset.user_item_matrix(value="binary")
+    norm = np.linalg.norm(X, axis=0)
+    Xn = X / np.where(norm > 0, norm, 1.0)
+    S = Xn.T @ Xn
+    np.fill_diagonal(S, 0.0)
+    assert ((W != 0.0).sum(axis=1) <= 5).all()          # never keeps more than k
+    for i in range(W.shape[0]):
+        # cosine over binary profiles is >= 0, so the k largest of W are the kept ones
+        np.testing.assert_allclose(np.sort(W[i])[::-1][:5],
+                                   np.sort(S[i])[::-1][:5], atol=1e-10)
 
 
 def test_score_handles_unknown_users(data):

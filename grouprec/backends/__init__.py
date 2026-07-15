@@ -176,8 +176,10 @@ class ItemKNN(_UserMatrixMixin):
         S = np.asarray((Xn.T @ Xn).todense())
         np.fill_diagonal(S, 0.0)
         if self.k is not None and self.k < S.shape[0]:
-            # keep only the top-k neighbours per item (zero the rest)
-            keep = np.argsort(-S, axis=1)[:, : self.k]
+            # keep only the top-k neighbours per item (zero the rest). Stable sort so tied
+            # similarities resolve by ascending item index rather than by whatever order the
+            # sort happens to produce -- the convention used throughout the library.
+            keep = np.argsort(-S, axis=1, kind="stable")[:, : self.k]
             mask = np.zeros_like(S, dtype=bool)
             np.put_along_axis(mask, keep, True, axis=1)
             S = np.where(mask, S, 0.0)
