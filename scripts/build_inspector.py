@@ -375,8 +375,8 @@ def build(out: Path) -> None:
             "kind": kind, "cohesion": round(cohesions[gslot], 2),
             "members": members_out, "candidates": cand, "pos": pos,
             "agg": [r.round(4).tolist() for r in rm],            # per-member scores (attribution)
-            "scoreGrid": score_grid,                              # GroupIM: combo -> [C scores]
-            "orderGrid": order_grid,                              # wAVG + EPFuzzDA: combo -> [ordering]
+            "scoreGrid": score_grid,                              # wAVG + GroupIM: combo -> [C scores]
+            "orderGrid": order_grid,                              # EPFuzzDA: combo -> [ordering]
             "attGrid": {"GroupIM": gim_att_grid},                 # GroupIM: combo -> [M att weights]
         })
         print(f"  [group {gslot + 1}/{len(chosen)}] {kind} users={mset} coh={cohesions[gslot]:.2f} consensus={len(cons)}")
@@ -478,7 +478,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body>
 <h1>Group recommendation inspector</h1>
-<p class="subtitle">Real MovieLens (latest-small) · groups from <code>gr.groups.synthetic</code> (similar / divergent / outlier) with consensus-derived interactions · the slider is each member's <b>importance weight</b> (normalised to sum to 100%)</p>
+<p class="subtitle">Real MovieLens (latest-small) · groups from <code>gr.groups.synthetic</code> (similar / divergent / outlier) with consensus-derived interactions · the slider is each member's <b>importance weight</b> (5 discrete levels — each a precomputed output; normalised to sum to 100%)</p>
 
 <div class="viewtabs">
   <button class="tab-btn active" id="vt-inspector" onclick="setView('inspector')">Inspector</button>
@@ -593,12 +593,20 @@ gim.group_scores(members, cands, member_weights=w)</pre>
 
   <h3>5 · Latent concepts (how the SAE was adopted)</h3>
   <p>We reuse a <b>Top-K sparse autoencoder</b> (standardised input, unit-norm decoder, ReLU encoder,
-  hard top-K=6, MSE + small L1) and fit it on <b>GroupIM's item embeddings</b> (the rows of its
-  <code>group_predictor</code> weight — one vector per movie). Each latent feature is <b>named by the
-  dominant genre</b> of its top-activating movies, turning opaque dimensions into readable concepts.
-  A member is tagged with a concept because the films they watched activate it; the films listed are
-  the concept's global <b>exemplars</b>, so they may differ from the member's own history. The SAE is
-  only an explanation of members.</p>
+  hard top-K=6, MSE + small L1) and fit it on <b>GroupIM's item embeddings</b> — specifically the rows
+  of its <code>encoder.user_predictor</code> weight, one vector per movie. Each latent feature is
+  <b>named by the dominant genre</b> of its top-activating movies, turning opaque dimensions into
+  readable concepts. A member is tagged with a concept because the films they watched activate it; the
+  films listed are the concept's global <b>exemplars</b>, so they may differ from the member's own
+  history. The SAE is only an explanation of members.</p>
+  <p><b>Why the encoder head, and why "lift".</b> Fitting the SAE on <code>group_predictor</code>
+  instead gave <em>every</em> member the same concepts: that head is trained on only as many target
+  distributions as there are groups, so its item space collapses onto popularity (one direction
+  explained ~66% of the variance, correlating ≈&minus;0.68 with item popularity) and the SAE simply
+  decomposed <em>popularity</em>. The <code>encoder.user_predictor</code> head is pretrained over
+  <b>all users</b>, so it carries real taste structure. Independently, ranking a member's concepts by
+  raw mean activation returns whatever is globally strongest, so we rank by <b>lift</b> — the member's
+  mean activation divided by the global mean, i.e. what is <em>distinctive</em> about that member.</p>
 
   <h3>6 · Every displayed subset is deterministic</h3>
   <table>
@@ -607,7 +615,7 @@ gim.group_scores(members, cands, member_weights=w)</pre>
     <tr><td>Candidate pool (50)</td><td>consensus positive + 49 negatives sampled uniformly (per-group seed) from items no member rated</td></tr>
     <tr><td>Recs received (3)</td><td>member's top-3 candidates by EASE score</td></tr>
     <tr><td>Top-5 recs</td><td>top-5 by group score / selection order</td></tr>
-    <tr><td>Latent concepts (3)</td><td>SAE features with highest mean activation over the member's items</td></tr>
+    <tr><td>Latent concepts (3)</td><td>SAE features with the highest <em>lift</em> over the member's items (member mean activation ÷ global mean, i.e. most distinctive)</td></tr>
     <tr><td>Concept exemplars (3)</td><td>items with highest activation for the feature</td></tr>
   </table>
   <p style="margin-top:14px">Reproduce with <code>python scripts/build_inspector.py</code>. Full write-up:
@@ -625,6 +633,9 @@ gim.group_scores(members, cands, member_weights=w)</pre>
 const DATA = /*__DATA__*/;
 const ALGOS = DATA.algorithms, LEVELS = DATA.gridLevels, TITLES = DATA.titles;
 const SCOREK = DATA.scoreKeys, ORDERK = DATA.orderKeys;
+// Outputs are precomputed only at the grid levels, so the sliders must move in those same
+// steps -- otherwise the handle/label imply a granularity the results cannot reflect.
+const STEP = 100 / (LEVELS.length - 1);
 const tip = document.getElementById('tip');
 let algoKey = ALGOS[0].key, groupIdx = 0, attrView = 'history', weights = [], chart = null;
 
@@ -661,7 +672,7 @@ function computeScores(){
   if(!isE2E()){
     for(let m=0;m<M;m++) for(let c=0;c<C;c++) contrib[m][c]=ew[m]*S[m][c];
   }
-  if(SCOREK.indexOf(algoKey)>=0){                   // score-based (GroupIM)
+  if(SCOREK.indexOf(algoKey)>=0){                   // score-based (wAVG, GroupIM)
     const vec = g.scoreGrid[algoKey][comboKey()] || g.scoreGrid[algoKey][eqKey()];
     for(let c=0;c<C;c++) score[c]=vec[c];
     if(isE2E()){
@@ -670,7 +681,7 @@ function computeScores(){
       if(attW){ for(let c=0;c<C;c++) for(let m=0;m<M;m++) contrib[m][c]=attW[m]; }
       else if(g.att){ const att=g.att[algoKey]; for(let c=0;c<C;c++) for(let m=0;m<M;m++) contrib[m][c]=ew[m]*att[m][c]; }
     }
-  } else {                                          // order-based (EP-FuzzDA, wAVG)
+  } else {                                          // order-based (EP-FuzzDA)
     const ord = g.orderGrid[algoKey][comboKey()] || g.orderGrid[algoKey][eqKey()];
     for(let r=0;r<ord.length;r++) score[ord[r]] = (ord.length - r);
   }
@@ -703,9 +714,11 @@ function renderControls(){
   document.getElementById('score-label').textContent = scoreLbl;
   document.getElementById('score-legend').textContent = scoreLbl.charAt(0).toUpperCase() + scoreLbl.slice(1);
 }
-function updateWeightLabels(){ const wn=normWeights(); group().members.forEach((u,i)=>{const el=document.getElementById('wlab-'+i); if(el) el.textContent=Math.round(wn[i]*100)+'%';}); }
+// Labels show the EFFECTIVE (grid-snapped) weights, so the percentage always matches the
+// weights the displayed ranking was actually computed with.
+function updateWeightLabels(){ const wn=effectiveWeights(); group().members.forEach((u,i)=>{const el=document.getElementById('wlab-'+i); if(el) el.textContent=Math.round(wn[i]*100)+'%';}); }
 function renderUsers(){
-  const g=group(), wn=normWeights();
+  const g=group(), wn=effectiveWeights();
   document.getElementById('users-container').innerHTML=g.members.map((u,i)=>`
     <div class="user-card"><div class="user-header">
       <div class="avatar" style="background:${u.bg};color:${u.color}">${u.initials}</div>
@@ -713,7 +726,8 @@ function renderUsers(){
            <div style="font-size:11px;color:var(--text-muted)">top: ${u.history.map(title).join(' · ')||'—'}</div></div>
       <div style="margin-left:auto;font-size:12px;color:var(--text-sec)" id="wlab-${i}">${Math.round(wn[i]*100)}%</div>
     </div><div class="slider-row"><span style="font-size:11px;color:var(--text-muted)">influence</span>
-      <input type="range" min="0" max="100" value="${Math.round(weights[i]*100)}" step="1"
+      <input type="range" min="0" max="100" value="${Math.round(weights[i]*100)}" step="${STEP}"
+        title="Snaps to the ${LEVELS.length} precomputed levels (${LEVELS.join(', ')}) -- every position is a real, precomputed output"
         oninput="weights[${i}]=this.value/100;updateWeightLabels();renderRecs();renderChart()">
     </div></div>`).join('');
 }
@@ -770,8 +784,8 @@ function renderAttr(){
       return `<b>${u.label}:</b><br>&nbsp;&nbsp;${f}`;
     }).join('<br>');
     note.textContent = isE2E()
-      ? 'Concepts a member triggers (top-3 by activation over their history), from a Top-K SAE over GroupIM\'s item embeddings. These explain member taste profiles — the SAE is not involved in the model\'s attention-based steering.'
-      : 'Concepts a member triggers (top-3 by activation over their history), from a Top-K SAE over item embeddings, labelled by the genre of each concept\'s top items. The films listed are the concept\'s exemplars, so they may differ from the member\'s own history.';
+      ? 'The 3 concepts most distinctive of each member (highest lift = their mean activation over their history / the global mean), from a Top-K SAE over GroupIM\'s encoder item embeddings. These explain member taste profiles — the SAE is not involved in the model\'s attention-based steering.'
+      : 'The 3 concepts most distinctive of each member (highest lift = their mean activation over their history / the global mean), from a Top-K SAE over item embeddings, labelled by the genre of each concept\'s top items. The films listed are the concept\'s exemplars, so they may differ from the member\'s own history.';
   }
 }
 function renderLegend(){
