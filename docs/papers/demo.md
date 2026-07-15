@@ -40,5 +40,5 @@ Full write-up of every framework call and every displayed subset:
 
 - [Design (the rift)](../design.md) — the two-community split the toolkit bridges
 - [Evaluation](../evaluation.md) — coupled / decoupled / sampled protocols
-- [Reproducibility](../reproducibility.md) — pinned datasets, `gr.Experiment`, citations
+- [Reproducibility](../reproducibility.md) — `gr.Experiment` (config / git / env / seeds), citations
 - [README](https://github.com/pdokoupil/grouprec#readme)

@@ -42,13 +42,13 @@ model through `GroupIM.group_scores` — computed offline and baked into one pag
 
 -   **Reproducible by default**
 
-    `gr.Experiment` captures seed + environment + git SHA + citations; datasets are
-    pinned by checksum; every method ships its BibTeX via `gr.cite(...)`.
+    `gr.Experiment` records the run's config, git revision, environment, and seeds;
+    rankings are deterministic, and every method ships its BibTeX via `gr.cite(...)`.
 
--   **Bring your own everything**
+-   **Bring your own base recommender**
 
     Adapters for LensKit / implicit / RecBole, license-aware dataset loaders, and
-    hooks to register custom metrics, aggregators, and group kinds.
+    hooks to register custom metrics.
 
 </div>
 

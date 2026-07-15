@@ -29,7 +29,6 @@ nav:
   - Extending (algorithm/dataset/metric/group kind): extending.md
   - Integration (LensKit / RecBole / implicit): integration.md
   - Interactive inspector: INSPECTOR.md
-  - Leaderboard: leaderboard.md
   - Demo paper (RecSys 2026): papers/demo.md
 markdown_extensions:
   - admonition
