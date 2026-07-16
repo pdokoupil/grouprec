@@ -25,8 +25,9 @@ from .base import GroupNNModel
 from .consrec import ConsRec
 from .data import GroupTrainData, make_synthetic_group_data
 from .groupim import GroupIM
+from .hhgr import HHGR
 from .hypergraph import HyperGroup
 from .ncf import NCFGroup
 
-__all__ = ["AGREE", "NCFGroup", "GroupIM", "ConsRec", "HyperGroup", "AlignGroup",
+__all__ = ["AGREE", "NCFGroup", "GroupIM", "ConsRec", "HyperGroup", "HHGR", "AlignGroup",
            "GroupNNModel", "GroupTrainData", "make_synthetic_group_data"]

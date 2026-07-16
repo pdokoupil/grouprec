@@ -13,7 +13,7 @@ from grouprec.aggregators import AverageAggregator
 from grouprec.backends import Popularity
 from grouprec.eval import evaluate_grouplevel
 from grouprec.models import (
-    AGREE, AlignGroup, ConsRec, GroupIM, HyperGroup, NCFGroup, make_synthetic_group_data,
+    AGREE, AlignGroup, ConsRec, GroupIM, HHGR, HyperGroup, NCFGroup, make_synthetic_group_data,
 )
 
 
@@ -183,7 +183,7 @@ def test_group_scores_uniform_interface(Model):
 
 @pytest.mark.parametrize("Model,supported", [
     (NCFGroup, True), (AGREE, True), (GroupIM, True),
-    (ConsRec, False), (HyperGroup, False), (AlignGroup, False),
+    (ConsRec, False), (HyperGroup, False), (AlignGroup, False), (HHGR, False),
 ])
 def test_supports_member_weights_flag(Model, supported):
     assert Model.supports_member_weights is supported
@@ -249,6 +249,54 @@ def test_group_recommender_member_and_group_scores():
     rec2 = GroupRecommender(EASE(reg=50.0), EPFuzzDAAggregator(), normalize="minmax").fit(gd.dataset)
     with pytest.raises(NotImplementedError):
         rec2.group_scores(members, items=cands)
+
+
+def test_hhgr_fit_recommend_and_candidates():
+    gd = data_fixture()
+    m = HHGR(gd.groups, gd.group_interactions, emb_dim=16, epochs=2, group_epochs=3, seed=0)
+    m.fit(gd.dataset)
+    assert m.paradigm == "profile"
+    out = m.recommend(gd.groups[0], k=10)
+    assert len(out) == 10 and len(set(out.tolist())) == 10
+    cands = [int(x) for x in gd.dataset.items[:20]]
+    ranked = m.recommend(gd.groups[0], k=5, candidates=cands)
+    assert len(ranked) == 5 and set(ranked.tolist()) <= set(cands)
+    # ranking by group_scores agrees with recommend(candidates=...)
+    sub = m.group_scores(gd.groups[0], cands)
+    np.testing.assert_array_equal(np.asarray(cands)[np.argsort(-sub, kind="stable")[:5]], ranked)
+    # transductive: per-member weighting is not defined
+    with pytest.raises(NotImplementedError):
+        m.group_scores(gd.groups[0], member_weights=[1.0] * len(gd.groups[0]))
+
+
+def test_hhgr_double_scale_views_and_group_graph():
+    """The two scales must actually differ (coarse drops users, fine drops hyperedges),
+    otherwise the self-supervised signal is vacuous."""
+    from grouprec.models.hhgr import _corrupt_views, _user_group_incidence, _group_graph
+    members = [np.array([0, 1, 2]), np.array([2, 3, 4]), np.array([4, 5, 0]), np.array([9])]
+    H = _user_group_incidence(members, n_users=10, n_groups=4)
+    assert H.shape == (10, 4) and H.sum() == 10        # one entry per membership
+    fine, coarse = _corrupt_views(H, np.random.default_rng(0), coarse_frac=0.5, fine_frac=0.5)
+    # both views are subsets of the original incidence, and are not identical to each other
+    assert (fine.toarray() <= H.toarray()).all()
+    assert (coarse.toarray() <= H.toarray()).all()
+    assert not np.array_equal(fine.toarray(), coarse.toarray())
+    # Groups 0,1,2 pairwise overlap (a triangle); group 3 is disjoint. The reference builds
+    # H_gg = (d @ d.T) * d, i.e. the weight is the number of *common neighbour groups*, masked
+    # to directly-overlapping pairs -- so an overlapping pair only scores if it also shares a
+    # third group, and identical/disjoint groups score zero.
+    gg = _group_graph(members, 4).toarray()
+    assert gg[0, 1] > 0 and gg[1, 0] > 0
+    assert gg[0, 3] == 0 and gg[3, 0] == 0
+    assert (np.diag(gg) == 0).all()
+
+
+def test_hhgr_learns_above_random():
+    gd = data_fixture()
+    m = HHGR(gd.groups, gd.group_interactions, emb_dim=32, epochs=5, group_epochs=30,
+             seed=0).fit(gd.dataset)
+    rep = evaluate_grouplevel(m, gd.dataset, gd.groups, gd.split, gd.group_truth, k=10, metrics=["hr"])
+    assert rep.to_dict()[("coupled", "hr", 10, "group")] > 10 / gd.dataset.n_items
 
 
 def test_bridge_deep_and_aggregator_one_leaderboard():
