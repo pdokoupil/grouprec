@@ -55,15 +55,35 @@ pipeline keyed by a `query` with `history_items`; the adapter trains the scorer 
 
 ## RecBole  (`pip install grouprec[recbole]`, experimental)
 
+The adapter wraps an **already-trained** RecBole model together with the RecBole `Dataset`
+it was trained on — it does not train anything itself. Train the model with RecBole, then
+pass the model object and its dataset:
+
 ```python
 from grouprec import backends as B
-base = B.recbole("BPR", "ml-100k")     # model name + a RecBole-prepared dataset/config
+from recbole.config import Config
+from recbole.data import create_dataset, data_preparation
+from recbole.model.general_recommender import BPR
+from recbole.trainer import Trainer
+
+cfg = Config(model="BPR", dataset="ml-100k", config_dict={"epochs": 20, "device": "cpu"})
+ds = create_dataset(cfg)
+train, valid, _ = data_preparation(cfg, ds)
+model = BPR(cfg, train.dataset)
+Trainer(cfg, model).fit(train, valid)
+
+base = B.recbole(model, ds)            # wrap the *trained model* + its RecBole dataset
 ```
-*API the adapter hides:* RecBole is config/`Dataset`/`Trainer`-driven and trains on its own
-data objects; the adapter wires a model + dataset, runs the trainer, and maps RecBole item
-ids back to your vocabulary for scoring. **Caveats:** experimental; some models expect a GPU;
-RecBole's preprocessing (its own filtering/splitting) can differ from your `Dataset`, so
-treat scores as approximate unless you align the preprocessing.
+
+(If you saved a checkpoint, `recbole.quick_start.load_data_and_model` returns the same
+`(model, dataset)` pair.)
+
+*API the adapter hides:* `fit(your_dataset)` only records the target item ordering; scoring
+calls the model's `full_sort_predict` and maps RecBole's internal item ids back to your
+`Dataset`'s vocabulary. **Caveats:** experimental; some models expect a GPU; RecBole's
+preprocessing (its own filtering/splitting) can differ from your `Dataset`, so treat scores
+as approximate unless you align the preprocessing. RecBole 1.2.x also requires **NumPy < 2**
+(it references the removed `np.float_`), so it may need a separate environment.
 
 ## Writing your own adapter (30 seconds)
 
