@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 """Build the *real-data* group-recommendation inspector (self-contained HTML).
 
-Dataset: MovieLens latest-small (real titles + genres -> interpretable items & concepts;
-its license permits redistribution, so titles can be published).
+Dataset: the 20-core of MovieLens latest by default (real titles + genres -> interpretable
+items & concepts; its license permits redistribution, so titles can be published). Pass
+``--small`` for a quick build off ml-latest-small; ``build()`` takes any registered dataset.
 
 Every *ranking* shown is produced by a genuine ``grouprec`` call -- the aggregators go
 through ``GroupRecommender`` and the deep model through ``GroupIM.group_scores``:
@@ -13,13 +14,13 @@ through ``GroupRecommender`` and the deep model through ``GroupIM.group_scores``
     from grouprec.aggregators import WeightedAverageAggregator, EPFuzzDAAggregator
     from grouprec.models import GroupIM
 
-    data   = gr.datasets.load("ml-latest-small")
+    data   = gr.datasets.k_core(gr.datasets.load("ml-latest"), k=20)
     groups = gr.groups.synthetic(data, kind="divergent", size=3, n=3, seed=0)
     gints  = gr.groups.derive_group_interactions(data, groups)   # per-group signal (majority, overridable)
     ease   = EASE(reg=200.0).fit(data)
 
     # results-aggregation (utilitarian / fairness), steered by per-member weights:
-    rec = GroupRecommender(ease, EPFuzzDAAggregator(member_weights=w)); rec.dataset_ = data
+    rec = GroupRecommender.from_fitted(ease, EPFuzzDAAggregator(member_weights=w), data)
     rec.recommend(members, k=5, candidates=cands)
 
     # profile-aggregation deep model, steered by per-member weights:
@@ -129,12 +130,18 @@ import grouprec as gr
 from grouprec import GroupRecommender
 from grouprec.backends import EASE
 from grouprec.models import GroupIM
-from grouprec.aggregators import WeightedAverageAggregator, EPFuzzDAAggregator
-from grouprec.aggregators._normalize import normalize_mgains
-from grouprec.datasets.cache import dataset_dir
-from grouprec.datasets.preprocess import k_core
+from grouprec.aggregators import (
+    WeightedAverageAggregator,
+    EPFuzzDAAggregator,
+    normalize_mgains,
+)
+from grouprec.datasets import dataset_dir, k_core
 
-DATASET = "ml-latest-small"   # redistribution-permitting MovieLens release (titles can be published)
+# Defaults reproduce the published page. Both MovieLens releases permit redistribution,
+# so film titles can be baked into the HTML; `ml-latest` is pinned by sha256 in the
+# registry. KCORE keeps EASE's n_items x n_items Gram matrix tractable -- see build().
+DATASET = "ml-latest"
+KCORE = 20
 
 # ---- config --------------------------------------------------------------- #
 GROUP_PLAN = [("similar", 3), ("divergent", 3), ("outlier", 3)]   # regime -> count
@@ -330,7 +337,7 @@ def build_agg_order_grid(rec, members, cand, agg_factory, weighted=True):
 # --------------------------------------------------------------------------- #
 # main build
 # --------------------------------------------------------------------------- #
-def build(out: Path, dataset: str = DATASET, kcore: int = 0) -> None:
+def build(out: Path, dataset: str = DATASET, kcore: int = KCORE) -> None:
     data = gr.datasets.load(dataset)                 # downloads+extracts (pinned snapshot)
     if kcore:
         # A framework call, not bespoke glue: iteratively drop users AND items with
@@ -390,19 +397,15 @@ def build(out: Path, dataset: str = DATASET, kcore: int = 0) -> None:
     # ---- fit recommenders (framework) ---- #
     print("[fit] EASE ...", flush=True)
     ease = EASE(reg=200.0).fit(data)
-    # one GroupRecommender with the pre-fitted EASE base; we swap its weighted aggregator per combo
-    rec = GroupRecommender(ease, WeightedAverageAggregator(), normalize="minmax")
-    rec.dataset_ = data                              # reuse the fitted base (skip refit)
+    # one GroupRecommender over the pre-fitted EASE base; we swap its weighted aggregator per combo
+    rec = GroupRecommender.from_fitted(ease, WeightedAverageAggregator(), data,
+                                       normalize="minmax")
     print("[fit] GroupIM ...", flush=True)
     groupim = GroupIM(groups, group_interactions, epochs=40, pretrain_epochs=10, seed=0).fit(data)
 
     # ---- SAE on GroupIM item embeddings, labelled by genre ---- #
-    # The encoder's user_predictor rows, not group_predictor: the latter is trained on only
-    # |groups| target distributions, so its item space collapses onto popularity (one component
-    # explains ~66% of the variance, correlating -0.68 with it) and every member comes out with
-    # the same concepts. The encoder head is pretrained over all users and carries taste structure.
     print("[fit] Top-K SAE on GroupIM encoder item embeddings ...", flush=True)
-    item_emb = groupim.net_.encoder.user_predictor.weight.detach().cpu().numpy()   # (n_items, d)
+    item_emb = groupim.item_embeddings()                                # (n_items, d)
     Z = fit_topk_sae(item_emb)
     Z_global = Z.mean(0) + 1e-9        # for distinctiveness ("lift") based concept selection
     Gmat = np.array([genre_vecs.get(int(items_arr[idx]), np.zeros(len(genres))) for idx in range(len(items_arr))])
@@ -515,10 +518,17 @@ def render_html(payload: dict) -> str:
     # The footer already prints a linked "MovieLens", so it takes the suffix only
     # ("latest (20-core)") -- otherwise it reads "MovieLens MovieLens latest (20-core)".
     suffix = label[len("MovieLens "):] if label.startswith("MovieLens ") else label
+    # the About tab's snippet must load the data the page was actually built on,
+    # k-core included -- it is the reproduction recipe, not an illustration
+    name = payload.get("datasetName", DATASET)
+    kcore = payload.get("kcore", 0)
+    load = f'gr.datasets.load("{name}")'
+    if kcore:
+        load = f'gr.datasets.k_core({load}, k={kcore})'
     return (_HTML_TEMPLATE
             .replace("__DATASET_SUFFIX__", suffix)
             .replace("__DATASET_LABEL__", label)
-            .replace("__DATASET_NAME__", payload.get("datasetName", DATASET))
+            .replace("__DATA_LOAD__", load)
             .replace("__SCALE__", scale)
             .replace("/*__DATA__*/", json.dumps(payload, separators=(",", ":"))))
 
@@ -656,13 +666,13 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   <p>Every <em>ranking</em> you see is produced by a real <code>grouprec</code> call — the
   aggregators through <code>GroupRecommender</code>, the deep model through
   <code>GroupIM.group_scores</code> (both steered by the per-member weights):</p>
-  <pre>data   = gr.datasets.load("__DATASET_NAME__")
+  <pre>data   = __DATA_LOAD__
 groups = gr.groups.synthetic(data, kind="divergent", size=3, n=3)
 gints  = gr.groups.derive_group_interactions(data, groups)   # per-group signal (majority, overridable)
 ease   = EASE(reg=200.0).fit(data)
 
 # results-aggregation (utilitarian / fairness), steered by member weights:
-rec = GroupRecommender(ease, EPFuzzDAAggregator(member_weights=w)); rec.dataset_ = data
+rec = GroupRecommender.from_fitted(ease, EPFuzzDAAggregator(member_weights=w), data)
 rec.recommend(members, k=5, candidates=cands)
 
 # profile-aggregation deep model, steered by member weights:
@@ -690,7 +700,8 @@ gim.group_scores(members, cands, member_weights=w)</pre>
   </ol>
 
   <h3>3 · Synthetic groups</h3>
-  <p>Movielens latest small was chosen due to high familiarity of the items, however, no groups were available in the dataset => synthetic groups were generated.</p>
+  <p>MovieLens was chosen for the familiarity of its items and a licence that permits the titles
+  to be republished here. It ships no real groups, so the groups below are synthetic.</p>
   <p>Membership comes from <code>gr.groups.synthetic</code> in three regimes — <b>similar</b>,
   <b>divergent</b>, <b>outlier</b> (three each), badged with the measured mean pairwise rating
   correlation. A group's interactions are <b>derived, not simulated</b>, by the framework call
@@ -944,11 +955,17 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--out", default="docs/group_rec_inspector.html")
     p.add_argument("--dataset", default=DATASET,
-                   help="registered dataset name (e.g. ml-latest-small, ml-latest, ml-25m)")
-    p.add_argument("--kcore", type=int, default=0,
-                   help="iterative k-core on users AND items before building (0 = off)")
+                   help=f"registered dataset name (default: {DATASET}; e.g. ml-latest-small, ml-25m)")
+    p.add_argument("--kcore", type=int, default=KCORE,
+                   help=f"iterative k-core on users AND items before building "
+                        f"(default: {KCORE}; 0 = off)")
+    p.add_argument("--small", action="store_true",
+                   help="shorthand for --dataset ml-latest-small --kcore 0: a much smaller "
+                        "page that builds in a fraction of the time, for a quick look or "
+                        "when adding a method. Does NOT reproduce the published page.")
     a = p.parse_args()
-    build(Path(a.out), dataset=a.dataset, kcore=a.kcore)
+    dataset, kcore = (("ml-latest-small", 0) if a.small else (a.dataset, a.kcore))
+    build(Path(a.out), dataset=dataset, kcore=kcore)
 
 
 if __name__ == "__main__":

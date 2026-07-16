@@ -220,6 +220,22 @@ class GroupIM:
                 loss = net.loss(vecs, mask, target, corrupt, self.device)
                 opt.zero_grad(); loss.backward(); opt.step()
 
+    def item_embeddings(self) -> "np.ndarray":
+        """The encoder's item latent factors, ``(n_items, embedding_dim)``.
+
+        These are the rows of the encoder's prediction head, which is pretrained over
+        every user and therefore carries taste structure. Note this is deliberately
+        *not* the group predictor: that head only ever sees ``|groups|`` target
+        distributions, so its item space collapses onto popularity.
+
+        Model-specific by design -- item factors are not a concept every recommender
+        in the zoo shares (EASE, for instance, learns an item-item matrix instead), so
+        there is no cross-model contract implied here.
+        """
+        if self.net_ is None:
+            raise RuntimeError("GroupIM must be fit() before reading item embeddings.")
+        return self.net_.encoder.user_predictor.weight.detach().cpu().numpy()
+
     def group_scores(self, members, items=None, *, member_weights=None,
                      return_attention=False):
         """Per-item group scores for a member set.

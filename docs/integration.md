@@ -90,7 +90,8 @@ Then `GroupRecommender(MyRecommender(), aggregator)` works, and it slots into
 ## Deep group models are different
 
 The adapters above are for **single-user base recommenders** used by results-aggregation.
-The **profile-aggregation** deep models (AGREE, GroupIM, ConsRec, HyperGroup, AlignGroup)
+The **profile-aggregation** deep models (NCFGroup, AGREE, GroupIM, ConsRec, HyperGroup,
+HHGR, AlignGroup)
 learn directly from group interactions and expose their own
 `recommend(members, k, candidates=…)` — they are not wrapped in `GroupRecommender`. Both
 families are evaluated by the same protocols and appear in one leaderboard; see

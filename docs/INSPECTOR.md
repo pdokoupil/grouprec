@@ -153,5 +153,8 @@ single HTML** — there is no server and no API call at view time:
 
 So the artifact is "compute with grouprec offline → embed as JSON → static page". Reproduce it
 with `grouprec-build-inspector` (after `pip install grouprec[torch]`), or from a repo checkout
-with `python scripts/build_inspector.py`. (The generation logic is ~400 lines of Python on the
-public API; the embedded data, not lines of code, is what makes the file large.)
+with `python scripts/build_inspector.py`. The defaults are the published page's configuration
+(`--dataset ml-latest --kcore 20`); the download and the EASE fit take a while, so pass
+`--small` to build a much smaller page off `ml-latest-small` when you just want a quick look
+or are adding a method. (The generation logic is ~400 lines of Python on the public API; the
+embedded data, not lines of code, is what makes the file large.)

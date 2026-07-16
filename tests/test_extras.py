@@ -155,6 +155,45 @@ def test_experiment_context_manager_writes_run_folder(tmp_path):
     assert loaded.seed == 7
 
 
+def test_experiment_block_seeds_on_entry(tmp_path):
+    import random
+    with gr.Experiment("seeded", seed=99, dir=tmp_path / "s"):
+        drawn = random.random()               # no gr.set_seed() call in the block
+    random.seed(99)
+    assert drawn == random.random()
+
+
+def test_benchmark_inside_experiment_records_results_and_citations(tmp_path):
+    rd = tmp_path / "auto"
+    task, data, groups = _task()
+    with gr.Experiment("auto", seed=0, dir=rd) as exp:
+        benchmark({"GFAR": GroupRecommender(Popularity(), gr.aggregators.get("GFAR"))},
+                  [task], metrics=["ndcg"], k=5, silent=True)
+    assert (rd / "benchmark.csv").exists()                     # attached without exp.attach()
+    assert "GFAR" in exp.cite                                  # cited what it actually ran
+
+
+def test_explicit_attach_overrides_the_auto_attached_benchmark(tmp_path):
+    rd = tmp_path / "override"
+    task, data, groups = _task()
+    mine = pd.DataFrame({"rec": ["AVG"], "ndcg": [0.5]})
+    with gr.Experiment("override", seed=0, dir=rd) as exp:
+        benchmark({"AVG": GroupRecommender(Popularity(), AverageAggregator())},
+                  [task], metrics=["ndcg"], k=5, silent=True)
+        exp.attach("benchmark", mine)
+    assert "rec,ndcg" in (rd / "benchmark.csv").read_text()     # the caller's frame won
+
+
+def test_benchmark_outside_experiment_does_not_leak(tmp_path):
+    from grouprec.experiment import active
+    task, data, groups = _task()
+    with gr.Experiment("scoped", seed=0, dir=tmp_path / "sc"):
+        pass
+    assert active() is None                                     # block exited cleanly
+    benchmark({"AVG": GroupRecommender(Popularity(), AverageAggregator())},
+              [task], metrics=["ndcg"], k=5, silent=True)       # must not raise
+
+
 def test_experiment_context_manager_finalizes_on_error(tmp_path):
     import json
     rd = tmp_path / "boom"

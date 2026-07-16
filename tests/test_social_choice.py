@@ -14,6 +14,7 @@ import pytest
 from scipy.stats import rankdata
 
 from grouprec.aggregators import (
+    normalize_mgains,
     AdditiveAggregator,
     AverageAggregator,
     WeightedAverageAggregator,
@@ -256,3 +257,36 @@ def test_selection_based_aggregators_have_no_item_scores():
         assert agg.produces_item_scores is False
         with pytest.raises(NotImplementedError):
             agg.score_items(rm)
+
+
+# --------------------------------------------------------------------------- #
+# normalize_mgains (public: the fairness aggregators assume commensurable scores)
+# --------------------------------------------------------------------------- #
+def test_normalize_mgains_is_public_and_row_independent():
+    import grouprec as gr
+
+    assert gr.aggregators.normalize_mgains is normalize_mgains
+    assert "none" in gr.aggregators.NORMALIZE_METHODS
+
+    rm = np.array([[1.0, 2.0, 3.0], [10.0, 30.0, 20.0]])       # different per-member scales
+    out = normalize_mgains(rm, "minmax")
+    np.testing.assert_allclose(out, [[0.0, 0.5, 1.0], [0.0, 1.0, 0.5]])
+
+    # every method rescales each row on its own, and leaves the ranking within a row intact
+    for method in gr.aggregators.NORMALIZE_METHODS:
+        got = normalize_mgains(rm, method)
+        assert got.shape == rm.shape
+        for src, dst in zip(rm, got):
+            assert (np.argsort(src) == np.argsort(dst)).all(), method
+
+
+def test_normalize_mgains_none_is_a_noop_and_unknown_raises():
+    rm = np.array([[1.0, 2.0], [3.0, 4.0]])
+    assert normalize_mgains(rm, None) is rm and normalize_mgains(rm, "none") is rm
+    with pytest.raises(ValueError, match="unknown normalize method"):
+        normalize_mgains(rm, "nope")
+
+
+def test_normalize_mgains_handles_a_flat_row():
+    out = normalize_mgains(np.array([[5.0, 5.0, 5.0]]), "minmax")
+    np.testing.assert_array_equal(out, [[0.0, 0.0, 0.0]])       # no divide-by-zero

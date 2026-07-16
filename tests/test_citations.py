@@ -31,10 +31,19 @@ def test_every_registered_dataset_has_citation(name):
 def test_every_deep_model_has_citation():
     pytest.importorskip("torch")
     from grouprec import models
-    for cls_name in ["NCFGroup", "AGREE", "GroupIM", "ConsRec", "HyperGroup", "AlignGroup"]:
+    from grouprec.models.base import GroupNNModel
+
+    # Derived from the package, not hardcoded: a hardcoded list silently exempts any
+    # model added after it was written, which is exactly how HHGR shipped uncited.
+    names = [n for n in models.__all__
+             if isinstance(getattr(models, n), type)
+             and getattr(getattr(models, n), "paradigm", None) == "profile"
+             and getattr(models, n) is not GroupNNModel]
+    assert len(names) >= 7, f"expected the full model zoo, found {names}"
+    for cls_name in names:
         cls = getattr(models, cls_name)
         assert has(cls_name) or getattr(cls, "cite_key", None), \
-            f"deep model {cls_name!r} has no citation"
+            f"deep model {cls_name!r} has no citation — add it to references.py (_REFS)"
 
 
 # --------------------------------------------------------------------------- #

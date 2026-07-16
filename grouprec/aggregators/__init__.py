@@ -30,9 +30,10 @@ from .sequential import (
     SDAAAggregator,
     SIAAAggregator,
 )
+from ._normalize import NORMALIZE_METHODS, normalize_mgains
 
 # Name -> class registry, keyed by the short paper name. Used by gr.benchmark and
-# the (forthcoming) gr.aggregators.get(...) factory.
+# the gr.aggregators.get(...) factory.
 _REGISTRY: dict[str, type[Aggregator]] = {
     "ADD": AdditiveAggregator,
     "AVG": AverageAggregator,
@@ -98,6 +99,8 @@ __all__ = [
     "EPFuzzDAWeightedAggregator",
     "SDAAAggregator",
     "SIAAAggregator",
+    "normalize_mgains",
+    "NORMALIZE_METHODS",
     "get",
     "available",
 ]

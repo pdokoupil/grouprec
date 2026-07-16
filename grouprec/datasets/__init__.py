@@ -18,6 +18,7 @@ from .groupim_format import load_groupim
 from .yin import fetch_yin, load_yin
 from .huggingface import from_amazon_reviews, from_huggingface
 from .loaders import generic_interactions
+from .cache import dataset_dir
 from .preprocess import binarize, filter_min_interactions, k_core
 from .registry import DatasetSpec, accept_all, available, info, load
 
@@ -50,5 +51,6 @@ __all__ = [
     "k_core",
     "filter_min_interactions",
     "binarize",
+    "dataset_dir",
     "DatasetSpec",
 ]

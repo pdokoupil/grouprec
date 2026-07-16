@@ -48,6 +48,10 @@ _REFS: dict[str, str] = {
     "ConsRec": "@inproceedings{wu2023consrec, title={ConsRec: Learning Consensus Behind "
                "Interactions for Group Recommendation}, author={Wu, Xixi and others}, "
                "booktitle={WWW}, year={2023}}",
+    "HHGR": "@inproceedings{zhang2021hhgr, title={Double-Scale Self-Supervised "
+            "Hypergraph Learning for Group Recommendation}, author={Zhang, Junwei and "
+            "Gao, Chongming and Jin, Depeng and Li, Yong}, booktitle={CIKM}, "
+            "year={2021}, doi={10.1145/3459637.3482426}}",
     # --- evaluation protocols ---
     "coupled_decoupled": "@inproceedings{coupled_decoupled, title={Coupled or Decoupled "
                          "Evaluation for Group Recommender Systems}, year={2024}}",
@@ -143,9 +147,10 @@ def citation_keys_for(obj) -> set:
             keys.add(_AGG_KEYS[name])
         if name.lower() in _DATASET_KEYS:
             keys.add(_DATASET_KEYS[name.lower()])
-    ds = getattr(obj, "dataset", None)  # GroupBenchmarkData.dataset
-    if ds is not None and ds is not obj:
-        keys |= citation_keys_for(ds)
+    for attr in ("dataset", "data"):  # GroupBenchmarkData.dataset / BenchmarkTask.data
+        ds = getattr(obj, attr, None)
+        if ds is not None and ds is not obj:
+            keys |= citation_keys_for(ds)
     return {k for k in keys if k in _REFS}
 
 
@@ -157,17 +162,30 @@ def collect_citations(*objs) -> dict:
     return {k: _REFS[k] for k in sorted(keys)}
 
 
+def _resolve(name: str) -> str | None:
+    """Map a public name to a ``_REFS`` key: an entry of its own, an aggregator short
+    name (several social-choice ones share the Masthoff reference), or a dataset."""
+    for table in (_REFS, _AGG_KEYS, _DATASET_KEYS):
+        for key, val in table.items():
+            if key.lower() == name.lower():
+                return key if table is _REFS else val
+    return None
+
+
 def cite(name: str) -> str:
-    """BibTeX for an algorithm/protocol (case-insensitive)."""
-    for key, val in _REFS.items():
-        if key.lower() == name.lower():
-            return val
-    raise KeyError(f"no citation for {name!r}; available: {sorted(_REFS)}")
+    """BibTeX for an algorithm/protocol/dataset (case-insensitive)."""
+    key = _resolve(name)
+    if key is None:
+        raise KeyError(
+            f"no citation for {name!r}; available: "
+            f"{sorted(set(_REFS) | set(_AGG_KEYS) | set(_DATASET_KEYS))}"
+        )
+    return _REFS[key]
 
 
 def has(name: str) -> bool:
     """Whether a citation exists for ``name`` (case-insensitive)."""
-    return any(k.lower() == name.lower() for k in _REFS)
+    return _resolve(name) is not None
 
 
 def all() -> dict[str, str]:  # noqa: A003

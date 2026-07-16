@@ -86,7 +86,8 @@ model.recommend(gd.groups[0], k=10)          # paradigm="profile" -> coupled gro
 ```
 
 Model zoo: **`NCFGroup`**, **`AGREE`**, **`GroupIM`** (InfoMax SSL), **`ConsRec`**
-(overlap/hypergraph/LightGCN consensus), **`HyperGroup`** (HGNN), **`AlignGroup`**
+(overlap/hypergraph/LightGCN consensus), **`HyperGroup`** (hierarchical hyperedge
+embedding), **`HHGR`** (double-scale self-supervised hypergraph), **`AlignGroup`**
 (InfoNCE member/group alignment) — each reviewed against its original repo. They plug
 into `benchmark(..., level="sampled")` and share the same coupled protocol as
 results-aggregators, so both families compare side by side.
@@ -127,7 +128,8 @@ Explore a group recommendation end-to-end in the
 — built on the 20-core of MovieLens `ml-latest` (204,257 users / 23,290 items / 32.2M
 ratings); every ranking is a real `grouprec` call
 ([how it's built](https://pdokoupil.github.io/grouprec/INSPECTOR/); regenerate with
-`grouprec-build-inspector --dataset ml-latest --kcore 20`, needs `[torch]`).
+`grouprec-build-inspector`, needs `[torch]` — add `--small` for a quick, much smaller
+page off `ml-latest-small`).
 
 ## What's inside
 

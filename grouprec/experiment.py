@@ -1,14 +1,16 @@
 """Reproducibility: an Experiment that records config + environment + code state and
 emits a copy-pastable reproduction snippet.
 
-    with gr.Experiment("camra-bridge", seed=42, cite=["GFAR"]) as exp:
-        gr.set_seed(exp.seed)
-        res = gr.benchmark(...)
-        exp.attach("leaderboard", res)   # CSV in the run folder; or exp.log(hr=0.62)
+    with gr.Experiment("camra-bridge", seed=42) as exp:
+        res = gr.benchmark(...)          # results + citations recorded automatically
     # on exit -> runs/camra-bridge-<ts>/ with config/env/citations/patch/results
 
 What it captures (so a run is reconstructable):
-* **seed** + user **params** (whatever you pass).
+* **seed** + user **params** (whatever you pass). Entering the block seeds Python /
+  NumPy / torch, so a run inside ``with`` is seeded whether or not you remember to.
+* **results**: a :func:`~grouprec.bench.benchmark` call inside the block attaches its
+  leaderboard and the citations for what it ran. Use ``exp.log(hr=0.62)`` /
+  ``exp.attach("name", frame)`` for anything computed some other way.
 * **environment**: python/platform, CPU count, hostname, and versions of
   grouprec/numpy/scipy/pandas/torch/implicit/lenskit.
 * **code state** (git): commit SHA, branch, dirty flag, and the **full** working-tree
@@ -25,8 +27,19 @@ import random
 import re
 import subprocess
 import sys
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+#: The Experiment whose ``with`` block we are inside, if any. Set by ``__enter__`` so
+#: gr.benchmark can attach its results without the caller wiring them up by hand.
+_ACTIVE: ContextVar = ContextVar("grouprec_active_experiment", default=None)
+
+
+def active() -> "Experiment | None":
+    """The innermost :class:`Experiment` currently open, or ``None``."""
+    return _ACTIVE.get()
 
 
 def set_seed(seed: int) -> None:
@@ -165,9 +178,12 @@ class Experiment:
 
     # -- context manager ---------------------------------------------------- #
     def __enter__(self) -> "Experiment":
+        set_seed(self.seed)          # so "seeded" is a property of the block, not of discipline
+        self._token = _ACTIVE.set(self)
         return self
 
     def __exit__(self, exc_type, exc, tb) -> bool:
+        _ACTIVE.reset(self._token)
         if exc is not None:
             self.results.setdefault("error", f"{exc_type.__name__}: {exc}")
         self.finalize()

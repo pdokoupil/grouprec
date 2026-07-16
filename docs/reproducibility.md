@@ -7,23 +7,31 @@ import grouprec as gr
 gr.set_seed(42)        # seeds python, numpy, and torch (if installed)
 ```
 
+Inside an `Experiment` block you don't need this call — entering the block seeds from
+`exp.seed`, so a run under `with` is seeded whether or not you remember to.
+
 ## The Experiment record
 
 `gr.Experiment` captures everything needed to reconstruct a run and, as a **context
 manager**, writes a self-contained per-run folder on exit:
 
 ```python
-with gr.Experiment("camra-bridge", seed=42, cite=["GFAR"]) as exp:
-    gr.set_seed(exp.seed)
-    res = gr.benchmark(...)
-    exp.log(note="divergent groups")     # scalar results / notes
-    exp.attach("leaderboard", res)       # DataFrame / BenchmarkResult / Report -> CSV
+with gr.Experiment("camra-bridge", seed=42) as exp:
+    res = gr.benchmark(...)              # leaderboard + citations recorded for you
+    exp.log(note="divergent groups")     # anything else: scalar results / notes
 # -> runs/camra-bridge-<timestamp>/
 print(exp.snippet())                     # copy-pastable reproduction header
 ```
 
+A `benchmark` call inside the block attaches its results as `benchmark.csv` and
+collects the citations for the recommenders and datasets it ran, so the common case
+needs no bookkeeping. For results computed some other way, `exp.attach("name", obj)`
+takes a DataFrame / `BenchmarkResult` / `Report` and writes it as `<name>.csv`;
+pass `cite=[...]` to add references by hand.
+
 Manual use still works (`exp = gr.Experiment(...)`, then `exp.finalize()` or
-`exp.save("exp.json")`). Override the folder with `dir=...`.
+`exp.save("exp.json")`), but only the `with` form seeds and records automatically.
+Override the folder with `dir=...`.
 
 ### The run folder
 

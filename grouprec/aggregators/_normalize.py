@@ -54,6 +54,9 @@ _FUNCS = {
     "cdf": _cdf,
 }
 
+#: Accepted ``method`` values for :func:`normalize_mgains` (``"none"`` is a no-op).
+NORMALIZE_METHODS: tuple[str, ...] = ("none", *sorted(_FUNCS))
+
 
 def normalize_mgains(rm: np.ndarray, method: str | None) -> np.ndarray:
     """Return a row-normalized copy of ``rm`` using ``method``.

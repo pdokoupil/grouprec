@@ -139,7 +139,18 @@ def benchmark(
                 records.append({"dataset": task.name, "recommender": rname, "paradigm": paradigm,
                                 "protocol": "-", "metric": "carbon_kg", "k": 0,
                                 "aggregation": "run", "value": em.kg_co2e})
-    return BenchmarkResult(records)
+    result = BenchmarkResult(records)
+
+    # Inside `with gr.Experiment(...)`, record the results and everything they cite
+    # without the caller having to wire it up. Frames are keyed by name, so a later
+    # exp.attach("benchmark", ...) overrides this rather than duplicating it.
+    from ..experiment import active
+    exp = active()
+    if exp is not None:
+        exp.attach("benchmark", result)
+        exp.add_citations(*recommenders.values(), *tasks)
+
+    return result
 
 
 @dataclass

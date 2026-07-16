@@ -176,3 +176,36 @@ def test_hero_example_runs_end_to_end():
     rec = GroupRecommender(base, AverageAggregator()).fit(data)
     out = rec.recommend(groups[0], k=10)
     assert len(out) == 10 and len(set(out.tolist())) == 10
+
+
+# --------------------------------------------------------------------------- #
+# from_fitted: reuse one fitted base across aggregators
+# --------------------------------------------------------------------------- #
+def test_from_fitted_matches_fit_without_refitting_the_base():
+    data = make_blobs_dataset(n_users=12, n_items=30, density=1.0, seed=5)
+    members = data.users[:3]
+
+    class CountingPopularity(Popularity):
+        fits = 0
+
+        def fit(self, dataset):
+            CountingPopularity.fits += 1
+            return super().fit(dataset)
+
+    base = CountingPopularity(measure="mean").fit(data)
+    assert CountingPopularity.fits == 1
+
+    reference = GroupRecommender(Popularity(measure="mean"), AverageAggregator()).fit(data)
+    reused = GroupRecommender.from_fitted(base, AverageAggregator(), data)
+
+    assert CountingPopularity.fits == 1                        # from_fitted did not refit
+    np.testing.assert_array_equal(reused.recommend(members, k=5),
+                                  reference.recommend(members, k=5))
+
+
+def test_from_fitted_carries_normalize_and_requires_dataset():
+    data = make_blobs_dataset(n_users=12, n_items=30, density=1.0, seed=6)
+    rec = GroupRecommender.from_fitted(Popularity().fit(data), AverageAggregator(),
+                                       data, normalize="minmax")
+    assert rec.normalize == "minmax" and rec.dataset_ is data
+    assert len(rec.recommend(data.users[:3], k=4)) == 4        # usable without .fit()

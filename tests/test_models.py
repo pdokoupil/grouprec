@@ -60,6 +60,21 @@ def test_models_learn_above_random(Model):
     assert hr > random_hr  # learned signal beats random
 
 
+def test_groupim_item_embeddings():
+    gd = data_fixture()
+    m = GroupIM(gd.groups, gd.group_interactions, embedding_dim=16,
+                epochs=2, pretrain_epochs=2, seed=0)
+    with pytest.raises(RuntimeError):
+        m.item_embeddings()                       # not fitted yet
+    m.fit(gd.dataset)
+    emb = m.item_embeddings()
+    assert emb.shape == (gd.dataset.n_items, 16)  # (n_items, embedding_dim)
+    assert np.isfinite(emb).all()
+    # the encoder head, not the group predictor (which only sees |groups| targets)
+    np.testing.assert_allclose(
+        emb, m.net_.encoder.user_predictor.weight.detach().cpu().numpy())
+
+
 def test_groupim_fit_recommend_and_candidates():
     gd = data_fixture()
     m = GroupIM(gd.groups, gd.group_interactions, embedding_dim=16,

@@ -1,8 +1,7 @@
 """Group recommenders: bind a base (single-user) recommender to an aggregator.
 
-This is the unifying layer from the design: a :class:`GroupRecommender` declares its
-paradigm and the (forthcoming) evaluator drives both paradigms uniformly. Step 4
-ships the results-first path; profile-first lands with the profile aggregators.
+This is the unifying layer: a :class:`GroupRecommender` declares its ``paradigm``, so
+the evaluator drives results-first and profile-first models through one interface.
 """
 
 from __future__ import annotations
@@ -20,17 +19,14 @@ from .data import Dataset
 class GroupRecommender:
     """Results-first group recommender: score each member, then aggregate.
 
-    Parameters
-    ----------
-    base : a fitted-or-unfitted :class:`~grouprec.backends.BaseRecommender`.
-    aggregator : a results-first :class:`~grouprec.aggregators.base.Aggregator`.
-
     For stateful (sequential) aggregators, call :meth:`recommend` once per session;
     the aggregator carries its fairness state across calls (call ``aggregator.reset()``
     to start a fresh group).
 
     Parameters
     ----------
+    base : a fitted-or-unfitted :class:`~grouprec.backends.BaseRecommender`.
+    aggregator : a results-first :class:`~grouprec.aggregators.base.Aggregator`.
     normalize : per-member normalization applied to the base RS scores *before*
         aggregation (``None``, ``"minmax"``, ``"standard"``, ``"robust"``,
         ``"quantile"``). The proportional-fairness aggregators (GFAR, EP-FuzzDA,
@@ -52,6 +48,23 @@ class GroupRecommender:
         self.base.fit(dataset)
         self.dataset_ = dataset
         return self
+
+    @classmethod
+    def from_fitted(cls, base: BaseRecommender, aggregator: Aggregator,
+                    dataset: Dataset, *, normalize: str | None = None
+                    ) -> "GroupRecommender":
+        """Bind an **already fitted** ``base`` to ``aggregator``, skipping the refit.
+
+        Scoring the members is independent of how their scores are aggregated, so one
+        fitted base serves any number of aggregators. This is the usual way to compare
+        the results-aggregation family: fit the base once, then sweep aggregators
+        (or member weights) over it, rather than paying for a refit per configuration.
+
+        ``base`` must already be fitted on ``dataset``; nothing here checks that.
+        """
+        rec = cls(base, aggregator, normalize=normalize)
+        rec.dataset_ = dataset
+        return rec
 
     def recommend(
         self,
