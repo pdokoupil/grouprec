@@ -193,19 +193,35 @@ class RecBoleRecommender(_FittedBase):
         uid_field, iid_field = rb.uid_field, rb.iid_field
         device = next(self.model.parameters()).device
 
-        internal_u = [rb.token2id(uid_field, str(u)) for u in users]
-        inter = Interaction({uid_field: torch.tensor(internal_u)}).to(device)
+        # RecBole's own preprocessing (filtering/splitting) can drop users and items,
+        # so its vocabulary need not cover every id in this Dataset (token2id raises on
+        # a missing token). Resolve defensively: a user RecBole never saw gets a flat
+        # row (no signal), and items it never saw are filled to each row's min so they
+        # rank last rather than crashing the run or being spuriously recommended.
+        def _to_id(field, token):
+            try:
+                return rb.token2id(field, str(token))
+            except (ValueError, KeyError):
+                return None
+
+        internal_u = [_to_id(uid_field, u) for u in users]
+        query = torch.tensor([iu if iu is not None else 0 for iu in internal_u])
+        inter = Interaction({uid_field: query}).to(device)
         with torch.no_grad():
             scores = self.model.full_sort_predict(inter).view(len(internal_u), -1)
         scores = scores.detach().cpu().numpy()
 
         # map RecBole internal item ids -> this library's item columns
         n = self.dataset_.n_items
-        out = np.zeros((len(users), n))
+        out = np.full((len(users), n), np.nan)
         for it, col in self.dataset_.item_index.items():
-            iid = rb.token2id(iid_field, str(it))
-            if 0 <= iid < scores.shape[1]:
+            iid = _to_id(iid_field, it)
+            if iid is not None and 0 <= iid < scores.shape[1]:
                 out[:, col] = scores[:, iid]
+        out = _fill_nan_rowmin(out)                     # unseen items -> rank last
+        for r, iu in enumerate(internal_u):
+            if iu is None:                              # unseen user -> no signal
+                out[r] = 0.0
         return self._select(out, items)
 
 

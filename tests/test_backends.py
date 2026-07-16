@@ -270,3 +270,37 @@ def test_recbole_bpr_scores_are_the_models_own(tmp_path):
     it0 = data.items[0]
     iid0 = ds.token2id(ds.iid_field, str(it0))
     assert np.isclose(s[0][data.item_index[it0]], direct[iid0], atol=1e-5)
+
+
+def test_recbole_tolerates_ids_it_never_saw(tmp_path):
+    """RecBole's own filtering/splitting can drop long-tail users and items, so its
+    vocabulary need not cover the Dataset. The adapter must degrade, not crash: an
+    unseen item ranks last, an unseen user gets a flat row."""
+    pytest.importorskip("recbole")
+    pytest.importorskip("torch")
+    import pandas as pd
+    from grouprec import Dataset
+
+    try:
+        model, ds = _train_tiny_recbole_bpr(tmp_path)
+    except Exception as e:
+        pytest.skip(f"recbole cannot run in this environment: {type(e).__name__}: {e}")
+
+    itoks = [t for t in ds.field2id_token[ds.iid_field] if t != "[PAD]"]
+    utoks = [t for t in ds.field2id_token[ds.uid_field] if t != "[PAD]"]
+    # a Dataset with one item and one user RecBole never saw
+    unseen_item, unseen_user = "999999", "888888"
+    pairs = [(u, i) for u in utoks for i in itoks]
+    pairs += [(unseen_user, itoks[0]), (utoks[0], unseen_item)]
+    df = pd.DataFrame(pairs, columns=["user", "item"])
+    df["rating"] = 1.0
+    data = Dataset(df)
+
+    base = B.recbole(model, ds).fit(data)
+    s = base.score([utoks[0], unseen_user])        # a known and an unknown user
+    assert s.shape == (2, data.n_items) and np.isfinite(s).all()   # no crash, no NaN
+    # the unseen item ranks last for the known user (filled to the row min)
+    known_row = s[0]
+    assert known_row[data.item_index[unseen_item]] == known_row.min()
+    # the unseen user carries no signal (flat row)
+    assert np.ptp(s[1]) == 0.0
