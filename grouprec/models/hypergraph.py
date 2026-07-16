@@ -42,8 +42,12 @@ class _HyperGroupNet(nn.Module):
         nn.init.normal_(self.user_embedding.weight, std=0.1)
         nn.init.normal_(self.item_embedding.weight, std=0.1)
         self.weight = nn.ModuleList([nn.Linear(2 * emb_dim, emb_dim) for _ in range(layers)])
-        self.predictor = nn.Sequential(nn.Linear(emb_dim, 16), nn.ReLU(),
-                                       nn.Linear(16, 1), nn.Sigmoid())
+        # Returns the pre-sigmoid logit. The reference ends this MLP in a Sigmoid and both
+        # trains and ranks on its output; we apply the sigmoid only in the loss. Ranking is
+        # unaffected in principle (the sigmoid is monotone) but not in practice: once trained,
+        # its output saturates to exactly 0/1 in float, collapsing ~101 candidates to a handful
+        # of distinct scores. The resulting ties then decide the ranking rather than the model.
+        self.predictor = nn.Sequential(nn.Linear(emb_dim, 16), nn.ReLU(), nn.Linear(16, 1))
 
     def user_scores(self, u_idx, i_idx):
         return self.predictor(self.user_embedding(u_idx) * self.item_embedding(i_idx)).squeeze(-1)
@@ -159,8 +163,9 @@ class HyperGroup:
                     gt = torch.as_tensor(g[s:s + bs], device=self.device)
                     pt = torch.as_tensor(p[s:s + bs], device=self.device)
                     nt = torch.as_tensor(n[s:s + bs], device=self.device)
-                    loss = F.softplus(net.group_scores(gt, nt, emb)
-                                      - net.group_scores(gt, pt, emb)).mean()
+                    # sigmoid here keeps the reference's objective; scoring stays on the logit
+                    loss = F.softplus(torch.sigmoid(net.group_scores(gt, nt, emb))
+                                      - torch.sigmoid(net.group_scores(gt, pt, emb))).mean()
                     opt.zero_grad(); loss.backward(); opt.step()
             if self.user_item and self._u_pos.shape[0]:
                 u, p, n = self._pairs(self._u_pos, rng, I)
@@ -168,7 +173,8 @@ class HyperGroup:
                     ut = torch.as_tensor(u[s:s + bs], device=self.device)
                     pt = torch.as_tensor(p[s:s + bs], device=self.device)
                     nt = torch.as_tensor(n[s:s + bs], device=self.device)
-                    loss = F.softplus(net.user_scores(ut, nt) - net.user_scores(ut, pt)).mean()
+                    loss = F.softplus(torch.sigmoid(net.user_scores(ut, nt))
+                                      - torch.sigmoid(net.user_scores(ut, pt))).mean()
                     opt.zero_grad(); loss.backward(); opt.step()
 
     def group_scores(self, members, items=None, *, member_weights=None,
