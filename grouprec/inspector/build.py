@@ -26,26 +26,27 @@ through ``GroupRecommender`` and the deep model through ``GroupIM.group_scores``
     gim = GroupIM(groups, gints).fit(data)
     gim.group_scores(members, cands, member_weights=w)        # or gim.recommend(..., member_weights=w)
 
-This script is NOT four lines: around those real calls it adds (a) parsing MovieLens
-``movies.csv`` for titles/genres, (b) candidate sampling, (c) a Top-K SAE (adapted from
-umap2026, NOT part of grouprec) for the latent concepts, and (d) baking a 125-point
-member-weight grid into one JSON blob -- ~400 lines total. The snippet above is the
-*essence*; this file is the full generator.
+The snippet above is the essence rather than the whole file; around those calls the
+generator also parses MovieLens ``movies.csv`` for titles and genres, samples candidates,
+fits a Top-K SAE (adapted from umap2026, not part of grouprec) for the latent concepts,
+and bakes the member-weight grid into a single JSON blob.
 
-Honest notes:
+What the page shows, and where it comes from:
+
 * Group membership: ``gr.groups.synthetic`` in three regimes (similar/divergent/outlier, 3 each),
-  tagged with regime + measured mean pairwise rating correlation.
-* Group interactions are DERIVED, not simulated, through the framework's
+  tagged with the regime and the measured mean pairwise rating correlation.
+* Group interactions are derived from the members' own ratings by
   ``gr.groups.derive_group_interactions`` (default majority rule: item liked by >=2 members,
-  like = rating >=4; the rule is overridable via a predicate).
-* Aggregator rankings come from the real ``GroupRecommender`` pipeline with the framework
-  ``WeightedAverageAggregator`` / ``EPFuzzDAAggregator`` (member_weights); the slider snaps to the
-  nearest grid point.
-* The deep model is GroupIM (additive, attention-pooled -> cleanly steerable; AGREE dropped as its
-  non-linear head steers weakly). Member steering is the framework's own
-  ``GroupIM.group_scores(member_weights=...)`` (reweights its attention pooling) -- NOT SAE steering.
-* SAE concepts: a Top-K SAE (adapted from umap2026, external to grouprec) on GroupIM's item
-  embeddings, labelled by genre. This is an *explanation* layer, not a grouprec component.
+  like = rating >=4; overridable via a predicate), not simulated.
+* Aggregator rankings come from the ``GroupRecommender`` pipeline with
+  ``WeightedAverageAggregator`` / ``EPFuzzDAAggregator`` (member_weights); the slider snaps to
+  the nearest grid point.
+* The deep model is GroupIM: its additive, attention-pooled group embedding steers cleanly,
+  whereas AGREE's non-linear head damps member-level steering. Steering goes through
+  ``GroupIM.group_scores(member_weights=...)``, which reweights the attention pooling; the SAE
+  plays no part in it.
+* SAE concepts: a Top-K SAE (adapted from umap2026, external to grouprec) over GroupIM's item
+  embeddings, labelled by genre. An explanation layer, not a grouprec component.
 
 --------------------------------------------------------------------------------------
 EXTENDING THIS SCRIPT
@@ -396,11 +397,10 @@ def build(out: Path, dataset: str = DATASET, kcore: int = 0) -> None:
     groupim = GroupIM(groups, group_interactions, epochs=40, pretrain_epochs=10, seed=0).fit(data)
 
     # ---- SAE on GroupIM item embeddings, labelled by genre ---- #
-    # NB: we use the ENCODER's user_predictor rows, not group_predictor. The group_predictor is
-    # trained on only |groups| target distributions, so its item space collapses onto popularity
-    # (one PC explains ~66% of variance, corr ~-0.68 with item popularity) and every member ends
-    # up with the same "concepts". The encoder head is pretrained over *all* users, so it actually
-    # carries taste structure.
+    # The encoder's user_predictor rows, not group_predictor: the latter is trained on only
+    # |groups| target distributions, so its item space collapses onto popularity (one component
+    # explains ~66% of the variance, correlating -0.68 with it) and every member comes out with
+    # the same concepts. The encoder head is pretrained over all users and carries taste structure.
     print("[fit] Top-K SAE on GroupIM encoder item embeddings ...", flush=True)
     item_emb = groupim.net_.encoder.user_predictor.weight.detach().cpu().numpy()   # (n_items, d)
     Z = fit_topk_sae(item_emb)

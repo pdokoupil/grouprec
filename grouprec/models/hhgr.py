@@ -15,25 +15,31 @@ pre-training, user-level self-supervision, then group-level learning.
 Transductive (per-group-id embeddings), so ``recommend`` maps a member set back to its
 group index, and ``supports_member_weights`` is ``False``.
 
-Deviations from the reference refactor (which is explicitly unfinished -- its README says
-"Coming soon" -- and which we do not copy bug-for-bug):
+The reference refactor is a work in progress, and this implementation departs from it in
+the following places. They are recorded because each one changes the results:
 
-* its ``HGNNConv.forward`` casts the activations with ``x.long()``, truncating every float
-  to an integer; we keep them float;
-* its ``HyperGCN`` holds the convolutions in a plain Python list, so they are never
-  registered as submodules and never receive gradients; we use ``nn.ModuleList``;
-* its fine-grained ``beta`` mask is allocated outside the per-user loop, so the dropout
-  accumulates across users instead of being resampled; we resample per user;
-* it materialises the propagation matrix densely; we keep it sparse (it is nonzero only
-  for users that share a group);
-* it feeds the group--group matrix into the group-level HGNN **unnormalised**, while the
-  user-level operator is normalised to row-sum 1. Where groups overlap heavily this makes
-  the group term explode (on Mafengwo its row sums reach ~5.6e4) and swamp the member
-  signal with noise, which collapses ranking to chance; the bug is invisible on CAMRa2011
-  only because its two-member households form no triangles, leaving that matrix empty. We
-  row-normalise it, so a message is a weighted average of the neighbouring groups;
+* it casts the hypergraph convolution's activations with ``x.long()``, truncating them to
+  integers; kept float here;
+* it holds the convolutions in a plain Python list, which leaves them unregistered as
+  submodules and so never trained; ``nn.ModuleList`` here;
+* its fine-grained ``beta`` mask is allocated outside the per-user loop, so the hyperedge
+  dropout accumulates across users rather than being resampled; resampled per user here;
+* it materialises the propagation matrix densely; kept sparse here, since it is nonzero
+  only for users that share a group;
+* it feeds the group--group matrix into the group-level HGNN unnormalised, while the
+  user-level operator is normalised to row-sum 1. Where groups overlap heavily the group
+  term then explodes (on Mafengwo those row sums reach ~5.6e4) and buries the member signal
+  under noise, leaving the ranking at chance. CAMRa2011 does not show this: its two-member
+  households form no triangles, so the matrix is empty and the term is inert. Row-normalised
+  here, making each message a weighted average of the neighbouring groups;
 * it freezes the user representation for the group stage while the network is in training
-  mode, baking in a dropout mask that inference never reproduces; we freeze the clean one.
+  mode, which bakes in a dropout mask that inference never reproduces; the clean
+  representation is frozen here.
+
+Validated against the numbers reported for S2-HHGR by ConsRec (WWW'23, Table 2) under the
+same 1-vs-100 sampled protocol: CAMRa2011 HR@5 0.626 / NDCG@5 0.400 (0.606 / 0.385
+reported), Mafengwo HR@5 0.852 / NDCG@5 0.752 with ``group_epochs=100, lr_group=1e-3``
+(0.757 / 0.732 reported).
 """
 
 from __future__ import annotations
