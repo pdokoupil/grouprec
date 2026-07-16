@@ -25,7 +25,15 @@ Deviations from the reference refactor (which is explicitly unfinished -- its RE
 * its fine-grained ``beta`` mask is allocated outside the per-user loop, so the dropout
   accumulates across users instead of being resampled; we resample per user;
 * it materialises the propagation matrix densely; we keep it sparse (it is nonzero only
-  for users that share a group).
+  for users that share a group);
+* it feeds the group--group matrix into the group-level HGNN **unnormalised**, while the
+  user-level operator is normalised to row-sum 1. Where groups overlap heavily this makes
+  the group term explode (on Mafengwo its row sums reach ~5.6e4) and swamp the member
+  signal with noise, which collapses ranking to chance; the bug is invisible on CAMRa2011
+  only because its two-member households form no triangles, leaving that matrix empty. We
+  row-normalise it, so a message is a weighted average of the neighbouring groups;
+* it freezes the user representation for the group stage while the network is in training
+  mode, baking in a dropout mask that inference never reproduces; we freeze the clean one.
 """
 
 from __future__ import annotations
@@ -62,6 +70,14 @@ def _hgnn_propagation(H: sp.spmatrix) -> sp.coo_matrix:
     Dv = sp.diags(1.0 / dv)
     De = sp.diags(1.0 / de)
     return (Dv @ H @ De @ H.T @ Dv).tocoo()
+
+
+def _row_normalize(A: sp.spmatrix) -> sp.coo_matrix:
+    """Row-normalise a propagation matrix so each message is a weighted average of the
+    neighbours (rows with no neighbours stay zero)."""
+    rs = np.asarray(A.sum(axis=1)).ravel()
+    inv = np.divide(1.0, rs, out=np.zeros_like(rs), where=rs > 0)
+    return (sp.diags(inv) @ A).tocoo()
 
 
 def _group_graph(members_idx, n_groups: int) -> sp.csr_matrix:
@@ -192,13 +208,19 @@ class _HHGRNet(nn.Module):
 
 
 class HHGR:
-    """Double-scale self-supervised hypergraph group recommender (``paradigm="profile"``)."""
+    """Double-scale self-supervised hypergraph group recommender (``paradigm="profile"``).
+
+    Defaults follow the reference implementation (``emb_dim=64``, ``drop_ratio=0.4``,
+    ``batch_size=512``, ``num_negatives=10``, 5 epochs per stage and a single group epoch).
+    On the real group benchmarks one group epoch is already tens of thousands of steps;
+    small datasets need ``group_epochs`` raised.
+    """
 
     paradigm = "profile"
     supports_member_weights = False   # transductive (group-id node); no member pooling to steer
 
     def __init__(self, groups: Groups, group_interactions, *, emb_dim: int = 64,
-                 epochs: int = 5, group_epochs: int = 30, lr_pretrain: float = 5e-4,
+                 epochs: int = 5, group_epochs: int = 1, lr_pretrain: float = 5e-4,
                  lr_ssl: float = 5e-4, lr_group: float = 1e-4, drop_ratio: float = 0.4,
                  num_negatives: int = 10, batch_size: int = 512, coarse_frac: float = 0.2,
                  fine_frac: float = 0.3, weight_decay: float = 0.0, user_item: bool = True,
@@ -243,7 +265,7 @@ class HHGR:
         H_fine, H_coarse = _corrupt_views(H, rng, self.coarse_frac, self.fine_frac)
         self._G_fine = _sp_to_tensor(_hgnn_propagation(H_fine), self.device)
         self._G_coarse = _sp_to_tensor(_hgnn_propagation(H_coarse), self.device)
-        self._G_gl = _sp_to_tensor(_group_graph(members, G).tocoo(), self.device)
+        self._G_gl = _sp_to_tensor(_row_normalize(_group_graph(members, G)), self.device)
 
         self.net_ = _HHGRNet(U, I, G, self.emb_dim, self.drop_ratio).to(self.device)
         self._u_pos = np.vstack([dataset.interactions["user"].map(ui).to_numpy(),
@@ -302,8 +324,13 @@ class HHGR:
         if self._g_pos.shape[0]:
             opt = torch.optim.Adam(net.parameters(), lr=self.lr_group, weight_decay=self.weight_decay)
             all_g = torch.arange(G, device=self.device)
-            # user representation is frozen for this stage (as in the reference)
+            # The user representation is frozen for this stage, so it must be the *clean* one:
+            # computed in train mode it would bake in a fixed dropout mask that inference never
+            # reproduces. Matters most where group-item data is scarce and the group score leans
+            # on the members.
+            net.eval()
             user_emb = self._user_embeddings(detach=True)
+            net.train()
             for _ in range(self.group_epochs):
                 g, p, n = self._pairs(self._g_pos, rng, I)
                 for s in range(0, g.shape[0], bs):
