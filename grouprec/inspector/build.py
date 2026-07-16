@@ -700,8 +700,9 @@ gim.group_scores(members, cands, member_weights=w)</pre>
   </ol>
 
   <h3>3 · Synthetic groups</h3>
-  <p>MovieLens was chosen for the familiarity of its items and a licence that permits the titles
-  to be republished here. It ships no real groups, so the groups below are synthetic.</p>
+  <p>The <b>__DATASET_LABEL__</b> dataset was chosen for the familiarity of its items and a
+  licence that permits the titles to be republished here. It ships no real groups, so the
+  groups below are synthetic.</p>
   <p>Membership comes from <code>gr.groups.synthetic</code> in three regimes — <b>similar</b>,
   <b>divergent</b>, <b>outlier</b> (three each), badged with the measured mean pairwise rating
   correlation. A group's interactions are <b>derived, not simulated</b>, by the framework call
