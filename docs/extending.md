@@ -44,6 +44,8 @@ a **2+2** group (a size-4 group made of two similar pairs that are dissimilar ac
 ```python
 import numpy as np, grouprec as gr
 
+data = gr.make_blobs_dataset(n_users=80, n_items=60, n_clusters=4, density=0.5, seed=0)
+
 def two_plus_two(sim, size, rng, hi=0.3, lo=0.0):
     n = sim.shape[0]
     for _ in range(200):

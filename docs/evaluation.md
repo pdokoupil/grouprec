@@ -9,8 +9,8 @@
   **coupled-only** and `benchmark` drops decoupled for them with a warning.
 
 ```python
-evaluate(rec, data, groups, folds, protocol=["coupled", "decoupled"],
-         metrics=["ndcg@10", "recall@10"], group_aggregations=["mean", "min", "minmax"])
+gr.evaluate(rec, data, groups, folds, protocol=["coupled", "decoupled"],
+            metrics=["ndcg@10", "recall@10"], group_aggregations=["mean", "min", "minmax"])
 ```
 
 The **same recommender** scored under both protocols, with the ranking changing between

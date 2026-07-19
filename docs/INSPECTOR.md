@@ -15,12 +15,11 @@ import grouprec as gr
 from grouprec import GroupRecommender
 from grouprec.backends import EASE
 from grouprec.aggregators import WeightedAverageAggregator, EPFuzzDAAggregator
-from grouprec.aggregators._normalize import normalize_mgains
 from grouprec.models import GroupIM
 
 # 1. dataset processing (download + parse + vocab) — one call
-data = gr.datasets.load("ml-latest")         # redistribution-permitting MovieLens release
-data = k_core(data, k=20)                    # 331k->204k users, 83k->23k items (framework call)
+data = gr.datasets.load("ml-latest")             # redistribution-permitting MovieLens release
+data = gr.datasets.k_core(data, k=20)            # 331k->204k users, 83k->23k items (framework call)
 
 # 2. synthetic group generation — random / similar / divergent / outlier, size K
 similar   = gr.groups.synthetic(data, kind="similar",   size=3, n=3, seed=0)
@@ -29,10 +28,15 @@ outlier   = gr.groups.synthetic(data, kind="outlier",   size=3, n=3, seed=0)
 
 # 2b. derive each group's item signal from members' individual likes (majority rule,
 #     overridable via a predicate) — the format the deep model trains on
-group_interactions = gr.groups.derive_group_interactions(data, divergent)
+groups = divergent
+group_interactions = gr.groups.derive_group_interactions(data, groups)
+
+# a group, its per-member weights, and the items to rank for it
+members, w = groups[0], [0.6, 0.3, 0.1]
+cands = gr.groups.candidate_items(data, members)
 
 # 3a. group recommendation via aggregators (results-aggregation), steered by member weights
-rec = GroupRecommender(EASE(reg=200.0), WeightedAverageAggregator(member_weights=[0.6, 0.3, 0.1]))
+rec = GroupRecommender(EASE(reg=200.0), WeightedAverageAggregator(member_weights=w))
 rec.fit(data)
 rec.recommend(members, k=5, candidates=cands)        # ranked item ids
 # swap the aggregator for fairness:
