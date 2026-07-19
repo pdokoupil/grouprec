@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "grouprec"
-version = "0.0.2"
+version = "0.0.3"
 description = "Group recommender systems for Python: results aggregation and profile aggregation as first-class citizens behind one API. Preference aggregation, group recommendation, fairness."
 readme = "README.md"
 requires-python = ">=3.10"
