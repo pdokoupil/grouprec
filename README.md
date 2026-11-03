@@ -167,10 +167,10 @@ ships with its citation, so your work is credited wherever the library is used.
 If you use `grouprec`, please cite it (`CITATION.cff`) and the relevant method
 (`gr.cite(...)`). Docs: <https://pdokoupil.github.io/grouprec>.
 
-A demo-track paper describing this toolkit is **under review at RecSys 2026**:
+A demo-track paper describing this toolkit has been accepted at RecSys 2026:
 
 > Patrik Dokoupil, Ludovico Boratto, and Ladislav Peska.
-> *GroupRec: A Unified Toolkit for Reproducible and Inspectable Group Recommendation Research.*
+> *GroupRec: A Unified Toolkit for Reproducible and Inspectable Group Recommendation Research.* ACM RecSys 2026: 1808-1810
 
 ## License
 
