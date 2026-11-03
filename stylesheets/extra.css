@@ -1,0 +1,102 @@
+/* grouprec docs — visual system shared with the GroupRec Inspector.
+   Mirrors the inspector's palette: a warm off-white canvas, a blue primary,
+   and the inspector's category colors (green / purple / amber) as accents,
+   so the landing page and the demo feel like one product. */
+
+:root {
+  --gr-blue:   #185FA5;
+  --gr-green:  #2f8f5b;
+  --gr-purple: #7a52c9;
+  --gr-amber:  #c2891b;
+}
+
+/* ---- light scheme ---- */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color:        #185FA5;
+  --md-primary-fg-color--light: #2b71b8;
+  --md-primary-fg-color--dark:  #12497f;
+  --md-accent-fg-color:         #12497f;
+  --md-default-bg-color:        #f8f7f3;   /* warm canvas, like the inspector */
+  --md-code-bg-color:           #f1efe8;
+  --gr-surface:                 #ffffff;
+  --gr-hero-1:                  #e6f1fb;   /* inspector accent-bg */
+  --gr-hero-2:                  #f8f7f3;
+}
+
+/* ---- dark scheme ---- */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color:        #12497f;
+  --md-primary-fg-color--light: #185FA5;
+  --md-primary-fg-color--dark:  #0d3860;
+  --md-accent-fg-color:         #85b7eb;
+  --md-default-bg-color:        #1e1e1c;   /* warm-dark, like the inspector */
+  --md-code-bg-color:           #262623;
+  --gr-blue:   #85b7eb;
+  --gr-green:  #69c993;
+  --gr-purple: #b497ec;
+  --gr-amber:  #e0a93a;
+  --gr-surface:                 #2c2c2a;
+  --gr-hero-1:                  #042c53;
+  --gr-hero-2:                  #1e1e1c;
+}
+
+/* ---- hero ---- */
+.hero {
+  position: relative;
+  padding: 2.6rem 1.5rem 1.9rem;
+  margin: -0.4rem 0 1.6rem;
+  border-radius: 14px;
+  background: radial-gradient(120% 140% at 0% 0%, var(--gr-hero-1) 0%, var(--gr-hero-2) 62%);
+  border: 1px solid var(--md-default-fg-color--lightest);
+}
+.hero h1 {
+  font-size: 2.7rem;
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+  margin: 0 0 .6rem;
+}
+.hero p {
+  font-size: .9rem;
+  max-width: 42rem;
+  color: var(--md-default-fg-color--light);
+}
+.hero .md-button { margin: .55rem .4rem 0 0; }
+.hero .md-button--primary { background-color: var(--gr-blue); border-color: var(--gr-blue); }
+/* a thin keyline that cycles the inspector's category colors */
+.hero::after {
+  content: "";
+  position: absolute;
+  left: 1.5rem; right: 1.5rem; bottom: 1rem;
+  height: 3px; border-radius: 3px; opacity: .85;
+  background: linear-gradient(90deg,
+    var(--gr-blue) 0%, var(--gr-green) 38%, var(--gr-purple) 70%, var(--gr-amber) 100%);
+}
+
+/* ---- inline inspector embed ---- */
+.inspector-embed {
+  width: 100%;
+  height: 760px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 12px;
+  background: var(--gr-surface);
+  box-shadow: 0 6px 22px rgba(24, 95, 165, .10);
+  margin: 1rem 0 .6rem;
+}
+@media screen and (max-width: 60em) {
+  .inspector-embed { height: 620px; }
+}
+
+/* ---- feature cards: left accent cycles the category colors ---- */
+.grid.cards > ul > li {
+  border-radius: 12px;
+  border-left: 4px solid var(--gr-blue);
+  background: var(--gr-surface);
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+.grid.cards > ul > li:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .08);
+}
+.grid.cards > ul > li:nth-child(2) { border-left-color: var(--gr-green); }
+.grid.cards > ul > li:nth-child(3) { border-left-color: var(--gr-purple); }
+.grid.cards > ul > li:nth-child(4) { border-left-color: var(--gr-amber); }
